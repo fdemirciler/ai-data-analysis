@@ -59,6 +59,13 @@ gcloud projects add-iam-policy-binding $PROJECT_ID `
   --member="serviceAccount:$SERVICE_ACCOUNT" `
   --role="roles/eventarc.eventReceiver"
 
+# Grant Pub/Sub Publisher to the Cloud Storage service account so GCS can
+# publish CloudEvents to Pub/Sub in this project (required by Eventarc).
+$GCS_SA = "service-$PROJECT_NUMBER@gs-project-accounts.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding $PROJECT_ID `
+  --member="serviceAccount:$GCS_SA" `
+  --role="roles/pubsub.publisher"
+
 # Verify service exists before binding/creating trigger
 $RUN_URL_CHECK = gcloud run services describe preprocess-svc --region=$REGION --format="value(status.url)"
 if ($RUN_URL_CHECK) {
@@ -175,7 +182,7 @@ if (Test-Path $FILE) {
     # 1) Get signed URL + datasetId
     $encName = [System.Uri]::EscapeDataString($FILENAME)
     $encMime = [System.Uri]::EscapeDataString($MIME)
-    $reqUri = "$SIGN_URL?filename=$encName&size=$SIZE&type=$encMime"
+    $reqUri = ("{0}?filename={1}&size={2}&type={3}" -f $SIGN_URL, $encName, $SIZE, $encMime)
     Write-Host "Signed URL request URI: $reqUri"
     try {
       $resp = Invoke-RestMethod -Uri $reqUri -Headers $headers -Method GET

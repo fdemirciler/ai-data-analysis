@@ -240,8 +240,10 @@ async def handle_eventarc(request: Request) -> Response:
             logging.warning("Failed to write error status to Firestore")
         return Response(status_code=500)
 
-
 if __name__ == "__main__":  # pragma: no cover
+    # This block is for local development or when run directly.
+    # Cloud Run will provide the PORT environment variable.
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

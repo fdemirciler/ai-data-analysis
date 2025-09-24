@@ -1,0 +1,7 @@
+# File: run-preprocess/project.toml
+
+[build]
+# Pin Python to a stable version with wheels for pyarrow/numpy
+[[build.env]]
+name = "GOOGLE_PYTHON_VERSION"
+value = "3.12"

@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "payload",
+  "type": "object",
+  "required": ["dataset", "columns", "mode", "version"],
+  "properties": {
+    "dataset": {
+      "type": "object",
+      "required": ["rows", "columns", "column_names", "dtypes"],
+      "properties": {
+        "rows": { "type": "integer", "minimum": 0 },
+        "columns": { "type": "integer", "minimum": 0 },
+        "column_names": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "dtypes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "columns": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "null_pct", "unique_pct"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "integer",
+              "float",
+              "percentage",
+              "currency",
+              "date",
+              "categorical",
+              "text",
+              "id"
+            ]
+          },
+          "null_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+          "unique_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+          "top_values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["value", "count"],
+              "properties": {
+                "value": { },
+                "count": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "maxItems": 5
+          },
+          "datetime_format": { "type": ["string", "null"] },
+          "is_potential_dimension": { "type": "boolean" }
+        }
+      }
+    },
+    "sample_rows": {
+      "type": "array",
+      "items": { "type": "object" },
+      "maxItems": 50
+    },
+    "excelInfo": {
+      "type": "object",
+      "properties": {
+        "sheet_used": { "type": "integer", "minimum": 0 },
+        "sheet_name": { "type": ["string", "null"] },
+        "sheets_total": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "cleaning_report": { "type": "object" },
+    "mode": { "type": "string", "enum": ["full", "schema_only"] },
+    "version": { "type": "string", "enum": ["1"] }
+  }
+}

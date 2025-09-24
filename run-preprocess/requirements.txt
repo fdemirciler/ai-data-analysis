@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.0
+gunicorn==22.0.0
+pandas==2.2.2
+numpy==1.26.4
+pyarrow==16.1.0
+openpyxl==3.1.5
+google-cloud-storage==2.16.0
+google-cloud-firestore==2.16.0
+google-cloud-logging==3.10.0

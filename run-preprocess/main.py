@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
@@ -104,18 +105,52 @@ async def handle_eventarc(request: Request) -> Response:
     Accepts CloudEvent-like body with `data.bucket` and `data.name`.
     Ignores events that are not under `/raw/` or are not CSV/XLSX.
     """
+    # Read raw body and attempt to support multiple delivery shapes:
+    # 1) CloudEvents structured: { "data": { "bucket": ..., "name": ... }, ... }
+    # 2) CloudEvents binary: body is the data object itself
+    # 3) Pub/Sub push: { "message": { "data": base64(json) }, ... }
+    # 4) GCS notification compatibility: top-level { "bucket": ..., "name": ... }
+    envelope: dict = {}
     try:
-        envelope = await request.json()
-    except Exception:
-        logging.warning("Invalid JSON for Eventarc request")
+        body_bytes = await request.body()
+        body_text = body_bytes.decode("utf-8") if body_bytes else "{}"
+        envelope = json.loads(body_text or "{}") if body_text else {}
+    except Exception as e:
+        logging.warning("Invalid JSON for Eventarc request: %s", e)
+        envelope = {}
+
+    data = None
+
+    # Structured CloudEvent
+    if isinstance(envelope, dict) and "data" in envelope and isinstance(envelope["data"], dict):
+        data = envelope["data"]
+
+    # Pub/Sub push format
+    if data is None and isinstance(envelope, dict) and "message" in envelope:
+        try:
+            msg = envelope.get("message", {})
+            b64 = msg.get("data")
+            if isinstance(b64, str):
+                decoded = base64.b64decode(b64 + "==")
+                inner = json.loads(decoded.decode("utf-8"))
+                data = inner.get("data") if isinstance(inner, dict) and "data" in inner else inner
+        except Exception as e:
+            logging.warning("Failed to decode Pub/Sub envelope: %s", e)
+
+    # GCS notification compatibility or binary CE body
+    if data is None and isinstance(envelope, dict):
+        if "bucket" in envelope or "name" in envelope or "objectId" in envelope:
+            data = envelope
+
+    if not isinstance(data, dict):
+        logging.warning("Event parsing failed; envelope keys=%s headers.ce-type=%s", list(envelope.keys()) if isinstance(envelope, dict) else type(envelope), request.headers.get("ce-type"))
         return Response(status_code=204)
 
-    data = envelope.get("data") or {}
     bucket = data.get("bucket")
-    name = data.get("name")
+    name = data.get("name") or data.get("objectId") or data.get("object")
 
     if not bucket or not name:
-        logging.warning("Missing bucket/name in event data")
+        logging.warning("Missing bucket/name after normalization: %s", data)
         return Response(status_code=204)
 
     # Only react to raw uploads (csv/xlsx)

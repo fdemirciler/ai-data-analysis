@@ -82,5 +82,21 @@ Invoke-WebRequest -Uri $resp.url -Method PUT -InFile $FILE -ContentType $MIME | 
 Write-Host "Upload complete."
 
 # 4) Wait and list artifacts
-Start-Sleep -Seconds 10
+Start-Sleep -Seconds 30
 gcloud storage ls "gs://$BUCKET/users/$UID/sessions/$SID/datasets/$($resp.datasetId)/**"
+
+# 5) Fetch Firestore dataset status (best-effort)
+try {
+  $TOKEN = (gcloud auth print-access-token | Out-String).Trim()
+  $docUrl = "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/documents/users/$UID/sessions/$SID/datasets/$($resp.datasetId)"
+  $doc = Invoke-RestMethod -Uri $docUrl -Headers @{ Authorization = "Bearer $TOKEN" } -Method GET -TimeoutSec 10
+  $status = $doc.fields.status.stringValue
+  if ($status) {
+    Write-Host "Firestore status: $status"
+  } else {
+    Write-Host "Firestore document retrieved (status field missing):"
+    $doc | ConvertTo-Json -Depth 8
+  }
+} catch {
+  Write-Host "Firestore read warning:" $_.Exception.Message
+}

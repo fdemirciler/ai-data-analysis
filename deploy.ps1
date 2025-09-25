@@ -19,6 +19,7 @@ gcloud services enable `
   firestore.googleapis.com `
   storage.googleapis.com `
   secretmanager.googleapis.com `
+  iamcredentials.googleapis.com `
   pubsub.googleapis.com
 
 # ===========================
@@ -50,6 +51,13 @@ gcloud projects add-iam-policy-binding $PROJECT_ID `
 gcloud storage buckets add-iam-policy-binding gs://$BUCKET `
   --member="serviceAccount:$SERVICE_ACCOUNT" `
   --role="roles/storage.objectAdmin"
+
+# ==================================================
+# IAM: allow runtime SA to sign blobs via IAM Credentials
+# ==================================================
+gcloud iam service-accounts add-iam-policy-binding $SERVICE_ACCOUNT `
+  --member="serviceAccount:$SERVICE_ACCOUNT" `
+  --role="roles/iam.serviceAccountTokenCreator"
 
 # =======================================================
 # Eventarc: permissions + trigger for GCS Object Finalize
@@ -115,7 +123,7 @@ gcloud functions deploy sign-upload-url `
   --trigger-http `
   --allow-unauthenticated `
   --service-account="$SERVICE_ACCOUNT" `
-  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1"
+  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1,RUNTIME_SERVICE_ACCOUNT=$SERVICE_ACCOUNT"
 
 # ======================================
 # Deploy Functions Gen2: chat (SSE HTTP)

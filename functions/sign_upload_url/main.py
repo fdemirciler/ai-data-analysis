@@ -6,11 +6,15 @@ from typing import Tuple
 
 from google.cloud import storage
 from google.cloud import firestore
+import google.auth
+from google.auth import impersonated_credentials
+import google.auth.transport.requests
 
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
 PROJECT_ID = os.getenv("GCP_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT", "ai-data-analyser"))
 TTL_DAYS = int(os.getenv("TTL_DAYS", "1"))
+RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
 
 ALLOWED_MIME = {
     "text/csv": ".csv",
@@ -33,6 +37,30 @@ def _require_headers(request) -> Tuple[str, str]:
     if not uid or not sid:
         raise ValueError("Missing X-User-Id or X-Session-Id header")
     return uid, sid
+
+
+def _impersonated_signing_credentials(sa_email: str):
+    """Create impersonated credentials for signing using IAM Credentials API.
+
+    Requires that the runtime service account has roles/iam.serviceAccountTokenCreator
+    on the target principal (can be itself). Also requires the
+    iamcredentials.googleapis.com API to be enabled.
+    """
+    if not sa_email:
+        # Fall back to default credentials; will likely fail signing if no private key
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        return creds
+
+    source_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    if getattr(source_creds, "token", None) is None:
+        source_creds.refresh(google.auth.transport.requests.Request())
+
+    return impersonated_credentials.Credentials(
+        source_credentials=source_creds,
+        target_principal=sa_email,
+        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        lifetime=3600,
+    )
 
 
 def sign_upload_url(request):
@@ -78,11 +106,15 @@ def sign_upload_url(request):
         bucket = storage_client.bucket(FILES_BUCKET)
         blob = bucket.blob(object_path)
 
+        # Build signing credentials via impersonation so V4 signing works without a local private key.
+        signing_creds = _impersonated_signing_credentials(RUNTIME_SERVICE_ACCOUNT)
+
         url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(minutes=15),
             method="PUT",
             content_type=mime,
+            credentials=signing_creds,
         )
 
         # Pre-create dataset doc as awaiting upload (optional, helps UI)
@@ -114,3 +146,4 @@ def sign_upload_url(request):
         return (json.dumps({"error": str(ve)}), 400, {"Content-Type": "application/json"})
     except Exception as e:  # noqa: BLE001
         return (json.dumps({"error": "internal error", "detail": str(e)[:500]}), 500, {"Content-Type": "application/json"})
+

@@ -5,7 +5,9 @@ $BUCKET = "ai-data-analyser-files"
 
 $UID = "demo-uid"
 $SID = "demo-sid"
-$FILE = "test_files\basic.csv"
+$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ROOT_DIR   = Split-Path -Parent $SCRIPT_DIR
+$FILE = (Join-Path $ROOT_DIR "test_files\basic.csv")
 $MIME = "text/csv"
 
 # 1) Cloud Run health (service is public right now)

@@ -7,6 +7,13 @@ $BUCKET = "ai-data-analyser-files"
 
 gcloud config set project $PROJECT_ID | Out-Null
 
+# Script-relative paths (works regardless of current working directory)
+$SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ROOT_DIR   = Split-Path -Parent $SCRIPT_DIR
+$SRC_RUN     = Join-Path $SCRIPT_DIR "run-preprocess"
+$SRC_FN_SIGN = Join-Path $SCRIPT_DIR "functions\sign_upload_url"
+$SRC_FN_ORCH = Join-Path $SCRIPT_DIR "functions\orchestrator"
+
 # =====================
 # Enable required APIs
 # =====================
@@ -33,7 +40,7 @@ $SERVICE_ACCOUNT = "$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 # ======================================================
 gcloud run deploy preprocess-svc `
   --region=$REGION `
-  --source="run-preprocess" `
+  --source="$SRC_RUN" `
   --service-account="$SERVICE_ACCOUNT" `
   --set-build-env-vars="GOOGLE_PYTHON_VERSION=3.12" `
   --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1" `
@@ -118,7 +125,7 @@ gcloud functions deploy sign-upload-url `
   --gen2 `
   --runtime=python312 `
   --region=$REGION `
-  --source="functions/sign_upload_url" `
+  --source="$SRC_FN_SIGN" `
   --entry-point="sign_upload_url" `
   --trigger-http `
   --allow-unauthenticated `
@@ -132,7 +139,7 @@ gcloud functions deploy chat `
   --gen2 `
   --runtime=python312 `
   --region=$REGION `
-  --source="functions/orchestrator" `
+  --source="$SRC_FN_ORCH" `
   --entry-point="chat" `
   --trigger-http `
   --allow-unauthenticated `
@@ -171,7 +178,7 @@ if ($RUN_URL) {
 # Smoke test (optional)
 # ======================
 # Update these paths if needed
-$FILE = "test_files\basic.csv"
+$FILE = (Join-Path $ROOT_DIR "test_files\basic.csv")
 $MIME = "text/csv"
 $UID = "demo-uid"
 $SID = "demo-sid"

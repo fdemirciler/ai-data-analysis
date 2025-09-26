@@ -1,6 +1,6 @@
 # AI Data Analyst – Progress Report
 
-Date: 2025-09-26 00:45 (+03:00)
+Date: 2025-09-26 10:55 (+03:00)
 
 ## Current Status
 - **Preprocessing is fully functional**. Upload via signed URL triggers preprocessing; artifacts are generated and Firestore status advances to `ready`.
@@ -8,13 +8,13 @@ Date: 2025-09-26 00:45 (+03:00)
 
 ## Deployed Components
 - **Cloud Run service: `preprocess-svc`**
-  - Framework: `FastAPI` in `run-preprocess/main.py`.
+  - Framework: `FastAPI` in `backend/run-preprocess/main.py`.
   - Endpoints:
     - `GET /healthz` – lightweight health endpoint (service is private; unauthenticated calls may 403/404).
     - `POST /eventarc` – Eventarc target; parses CloudEvents in multiple delivery shapes (structured, binary, Pub/Sub push, and GCS notification compatibility).
   - Responsibilities:
     - Download raw file from GCS under `users/{uid}/sessions/{sid}/datasets/{datasetId}/raw/input.{csv|xlsx}`.
-    - Run pipeline `run-preprocess/pipeline_adapter.py` to clean and profile data.
+    - Run pipeline `backend/run-preprocess/pipeline_adapter.py` to clean and profile data.
     - Write artifacts:
       - `cleaned/cleaned.parquet`
       - `metadata/payload.json`
@@ -23,13 +23,13 @@ Date: 2025-09-26 00:45 (+03:00)
   - Observability: integrates Google Cloud Logging (`cloud-logging: configured`).
 
 - **Cloud Functions (Gen2): `sign-upload-url`**
-  - Path: `functions/sign_upload_url/main.py`.
+  - Path: `backend/functions/sign_upload_url/main.py`.
   - Functionality: issues a V4 signed URL for direct browser PUT upload.
   - Security: uses IAM-based signing via impersonated credentials (no private key).
   - Behavior: creates initial Firestore dataset doc with `status: awaiting_upload` and `ttlAt`.
 
 - **Cloud Functions (Gen2): `chat` (orchestrator, SSE)**
-  - Path: `functions/orchestrator/` (deployed and available; orchestration logic outside the scope of this stage).
+  - Path: `backend/functions/orchestrator/` (deployed and available; orchestration logic outside the scope of this stage).
 
 - **Eventarc Trigger: `preprocess-trigger`**
   - Filters: `type=google.cloud.storage.object.v1.finalized`, `bucket=ai-data-analyser-files`.
@@ -81,13 +81,32 @@ flowchart TD
   - Cloud Run service is private; HTTP access requires identity.
 
 - **Configuration & Deploy**
-  - Script: `deploy.ps1` handles:
+  - Script: `backend/deploy.ps1` handles:
     - Enabling APIs.
     - Deploying Cloud Run `preprocess-svc` with buildpacks (Python 3.12).
     - Setting env vars: `FILES_BUCKET`, `GCP_PROJECT`, `TTL_DAYS`.
     - Creating/Updating Eventarc trigger.
     - Deploying Cloud Functions `sign-upload-url` and `chat`.
     - Printing service URLs and running a smoke test.
+
+## CI/CD
+- **Cloud Build**
+  - Config file: `backend/cloudbuild.yaml`
+  - Pipeline steps (unified):
+    - Enable required APIs (idempotent).
+    - Deploy Cloud Run `preprocess-svc` from `backend/run-preprocess/` and ensure IAM + Eventarc trigger.
+    - Deploy Functions Gen2 `sign-upload-url` and `chat` from `backend/functions/...`.
+    - Output endpoint URLs.
+  - Substitutions (with defaults): `_PROJECT_ID`, `_REGION`, `_BUCKET`.
+  - Recommended trigger setup:
+    - Repository: this repo
+    - Build config path: `backend/cloudbuild.yaml`
+    - Included files: `backend/**` (adjust as needed)
+    - Cloud Build Service Account must have:
+      - `roles/run.admin`, `roles/cloudfunctions.developer`
+      - `roles/iam.serviceAccountUser` on `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com`
+      - `roles/eventarc.admin` and `roles/pubsub.admin` (or equivalent for trigger mgmt)
+      - `roles/storage.admin` (for bucket IAM binding)
 
 ## Verification
 - **Smoke test**: `test.ps1`
@@ -106,6 +125,10 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-09-26 (later)**
+  - Repository restructure: moved backend components under `backend/`.
+  - Updated `backend/deploy.ps1` and `backend/test.ps1` to use script-relative paths.
+  - Added unified CI/CD at `backend/cloudbuild.yaml`.
 - **2025-09-26**
   - Deployed `preprocess-svc` rev `preprocess-svc-00005-w5c` via `deploy.ps1`.
   - Verified end-to-end: artifacts generated and Firestore updated to `ready`.

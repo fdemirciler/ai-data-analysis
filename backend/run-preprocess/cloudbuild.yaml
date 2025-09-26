@@ -1,0 +1,76 @@
+# CI/CD pipeline for preprocess-svc (Cloud Run service)
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _PROJECT_ID: ai-data-analyser
+  _REGION: europe-west4
+  _BUCKET: ai-data-analyser-files
+
+timeout: "1200s"
+
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Configure project & APIs
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        PROJECT_ID="${_PROJECT_ID}"
+        gcloud config set project "$PROJECT_ID"
+        gcloud services enable \
+          run.googleapis.com \
+          cloudbuild.googleapis.com \
+          artifactregistry.googleapis.com \
+          iamcredentials.googleapis.com \
+          storage.googleapis.com \
+          pubsub.googleapis.com \
+          --quiet
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Deploy preprocess-svc
+    dir: backend
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        PROJECT_ID="${_PROJECT_ID}"
+        REGION="${_REGION}"
+        BUCKET="${_BUCKET}"
+        PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+        SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+        gcloud run deploy preprocess-svc \
+          --region="$REGION" \
+          --source="run-preprocess" \
+          --service-account="$SA" \
+          --set-build-env-vars="GOOGLE_PYTHON_VERSION=3.12" \
+          --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1" \
+          --no-allow-unauthenticated
+
+        # Grant IAM roles (idempotent)
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+          --member="serviceAccount:$SA" \
+          --role="roles/datastore.user" || true
+
+        gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
+          --member="serviceAccount:$SA" \
+          --role="roles/storage.objectAdmin" || true
+
+        gcloud run services add-iam-policy-binding preprocess-svc \
+          --region="$REGION" \
+          --member="serviceAccount:$SA" \
+          --role="roles/run.invoker" || true
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Output endpoint
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        REGION="${_REGION}"
+        echo "RUN URL:" $(gcloud run services describe preprocess-svc --region="$REGION" --format="value(status.url)" || true)

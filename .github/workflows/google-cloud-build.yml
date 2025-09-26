@@ -1,0 +1,39 @@
+# .github/workflows/google-cloud-build.yml
+
+name: 'Deploy to Google Cloud'
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'backend/**' # Only run if files in the backend directory change
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: 'Build and Deploy Services'
+    runs-on: 'ubuntu-latest'
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: 'Checkout code'
+        uses: 'actions/checkout@v4'
+
+      - name: 'Authenticate to Google Cloud'
+        id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: 'Submit build to Cloud Build'
+        run: |
+          gcloud builds submit backend \
+            --config=backend/cloudbuild.yaml \
+            --substitutions=_REGION="europe-west4",_BUCKET="ai-data-analyser-files" \
+            --project=${{ env.PROJECT_ID }}

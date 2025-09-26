@@ -36,7 +36,7 @@ steps:
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: Deploy preprocess-svc
-    dir: backend
+    dir: backend/run-preprocess
     entrypoint: bash
     args:
       - -c
@@ -49,7 +49,7 @@ steps:
         SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
         gcloud run deploy preprocess-svc \
           --region="$REGION" \
-          --source="run-preprocess" \
+          --source="." \
           --service-account="$SA" \
           --set-build-env-vars="GOOGLE_PYTHON_VERSION=3.12" \
           --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1" \
@@ -95,7 +95,7 @@ steps:
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: Deploy sign-upload-url (Gen2)
-    dir: backend
+    dir: backend/functions/sign_upload_url
     entrypoint: bash
     args:
       - -c
@@ -110,7 +110,7 @@ steps:
           --gen2 \
           --runtime=python312 \
           --region="$REGION" \
-          --source="functions/sign_upload_url" \
+          --source="." \
           --entry-point="sign_upload_url" \
           --trigger-http \
           --allow-unauthenticated \
@@ -119,7 +119,7 @@ steps:
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: Deploy chat (Gen2)
-    dir: backend
+    dir: backend/functions/orchestrator
     entrypoint: bash
     args:
       - -c
@@ -133,7 +133,7 @@ steps:
           --gen2 \
           --runtime=python312 \
           --region="$REGION" \
-          --source="functions/orchestrator" \
+          --source="." \
           --entry-point="chat" \
           --trigger-http \
           --allow-unauthenticated \
@@ -141,7 +141,6 @@ steps:
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: Output endpoints
-    dir: backend
     entrypoint: bash
     args:
       - -c

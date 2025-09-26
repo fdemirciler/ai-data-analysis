@@ -102,3 +102,5 @@ try {
 } catch {
   Write-Host "Firestore read warning:" $_.Exception.Message
 }
+
+#test

@@ -28,7 +28,13 @@ curl http://localhost:8080/healthz
 
 ## Deploy (sketch)
 
-Build and deploy with your preferred method (Cloud Build, Docker, `gcloud run deploy`). Then create the Eventarc trigger per `docs/ops_checklist.md`.
+From the repository root, run:
+
+```
+./backend/deploy.ps1
+```
+
+This is the only supported deployment method. The script enables required APIs, deploys Cloud Run `preprocess-svc`, deploys the supporting Cloud Functions, and ensures the Eventarc trigger. After deployment, you can run `./backend/test.ps1` for a quick smoke test.
 
 ## Notes
 

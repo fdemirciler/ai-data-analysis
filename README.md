@@ -42,18 +42,12 @@ flowchart TD
   - `run-preprocess/` – Cloud Run preprocess service (FastAPI), pipeline, and requirements
   - `deploy.ps1` – One-shot provisioning and deploy script (script-relative paths)
   - `test.ps1` – Local smoke test (upload + artifact/Firestore checks)
-  - `cloudbuild.yaml` – Unified CI/CD pipeline for all backend components
 - `docs/` – API drafts and operational notes
 - `PROGRESS.md` – Ongoing progress log and architecture notes
 
 ## Getting started (quick)
 1. Ensure you’re on the correct project and have gcloud configured.
-2. One-shot deploy (manual):
-   - `./backend/deploy.ps1`
-   - Run `./backend/test.ps1` to upload a sample CSV and verify artifacts and Firestore status.
-3. CI/CD (recommended):
-   - Create a Cloud Build trigger pointing to `backend/cloudbuild.yaml`.
-   - Configure substitutions if needed: `_PROJECT_ID`, `_REGION`, `_BUCKET`.
-
+2. Deploy using `./backend/deploy.ps1` (this is the only supported deployment method).
+3. Optionally run `./backend/test.ps1` to upload a sample CSV and verify artifacts and Firestore status.
 ## Status
 The preprocessing stage is fully functional. See `PROGRESS.md` for the latest changes and operational notes.

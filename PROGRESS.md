@@ -80,39 +80,18 @@ flowchart TD
     - GCS service account granted `roles/pubsub.publisher` for CloudEvents → Pub/Sub.
   - Cloud Run service is private; HTTP access requires identity.
 
-- **Configuration & Deploy**
   - Script: `backend/deploy.ps1` handles:
     - Enabling APIs.
     - Deploying Cloud Run `preprocess-svc` with buildpacks (Python 3.12).
     - Setting env vars: `FILES_BUCKET`, `GCP_PROJECT`, `TTL_DAYS`.
     - Creating/Updating Eventarc trigger.
-    - Deploying Cloud Functions `sign-upload-url` and `chat`.
-    - Printing service URLs and running a smoke test.
-
-## CI/CD
-- **Cloud Build**
-  - Config file: `backend/cloudbuild.yaml`
-  - Pipeline steps (unified):
-    - Enable required APIs (idempotent).
-    - Deploy Cloud Run `preprocess-svc` from `backend/run-preprocess/` and ensure IAM + Eventarc trigger.
-    - Deploy Functions Gen2 `sign-upload-url` and `chat` from `backend/functions/...`.
-    - Output endpoint URLs.
-  - Substitutions (with defaults): `_PROJECT_ID`, `_REGION`, `_BUCKET`.
-  - Recommended trigger setup:
-    - Repository: this repo
-    - Build config path: `backend/cloudbuild.yaml`
-    - Included files: `backend/**` (adjust as needed)
-    - Cloud Build Service Account must have:
-      - `roles/run.admin`, `roles/cloudfunctions.developer`
-      - `roles/iam.serviceAccountUser` on `${PROJECT_NUMBER}-compute@developer.gserviceaccount.com`
-      - `roles/eventarc.admin` and `roles/pubsub.admin` (or equivalent for trigger mgmt)
-      - `roles/storage.admin` (for bucket IAM binding)
+  - Deploying Cloud Functions `sign-upload-url` and `chat`.
+  - Printing service URLs and running a smoke test.
 
 ## Verification
 - **Smoke test**: `test.ps1`
   - Health probe (best-effort; service is private so 404/403 is expected).
   - Requests signed URL, uploads sample CSV, waits 30s, lists artifacts, and prints Firestore `status`.
-  - Current outcome: artifacts present and status transitions to `ready`.
 
 - **Logs**
   - Cloud Run: use `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="preprocess-svc"' --limit=100 --freshness=1h`.
@@ -125,10 +104,14 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-09-27**
+  - Standardized on `backend/deploy.ps1` as the only deployment method.
+  - Removed `backend/cloudbuild.yaml` and all documentation references to Cloud Build.
+  - Updated `README.md` and `backend/run-preprocess/README.md` accordingly.
 - **2025-09-26 (later)**
   - Repository restructure: moved backend components under `backend/`.
   - Updated `backend/deploy.ps1` and `backend/test.ps1` to use script-relative paths.
-  - Added unified CI/CD at `backend/cloudbuild.yaml`.
+  - Added unified CI/CD at `backend/cloudbuild.yaml` (deprecated on 2025-09-27).
 - **2025-09-26**
   - Deployed `preprocess-svc` rev `preprocess-svc-00005-w5c` via `deploy.ps1`.
   - Verified end-to-end: artifacts generated and Firestore updated to `ready`.

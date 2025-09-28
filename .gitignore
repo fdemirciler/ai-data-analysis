@@ -62,5 +62,9 @@ logs/
 
 # ---- Test files ----
 test_files/
+test_files
+/test_files
+
+
 
 final_project_design.md

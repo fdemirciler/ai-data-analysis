@@ -42,33 +42,71 @@ Notes:
 
 ## 2) POST `/api/chat` (SSE)
 
-Start an analysis step; returns a Server-Sent Events stream.
+Start an analysis step; streams progress and results. LLM (Gemini 2.5 Flash) generates
+Python that operates on the dataset with Pandas/Numpy. Code is validated and executed
+in a sandboxed child process with a hard 60s timeout.
 
 Request JSON:
 ```json
 {
+  "uid": "<uid>",
   "sessionId": "<sid>",
   "datasetId": "<datasetId>",
-  "message": "Find trends in revenue by region"
+  "question": "Find trends in revenue by region"
 }
 ```
 
+Headers:
+- `X-User-Id: <uid>` (optional if provided in body)
+- `X-Session-Id: <sid>` (optional if provided in body)
+
 SSE events (examples):
 ```json
-{"type":"received"}
-{"type":"classifying","data":{"message":"Analyzing query intent..."}}
+{"type":"received","data":{"sessionId":"<sid>","datasetId":"<datasetId>"}}
 {"type":"validating"}
+{"type":"generating_code"}
 {"type":"running_fast"}
 {"type":"summarizing"}
 {"type":"persisting"}
-{"type":"done","data":{"resultRef":"gs://ai-data-analyser-files/users/.../results/<messageId>/"}}
+{"type":"done","data":{
+  "messageId":"<uuid>",
+  "chartData": {"kind":"bar","labels":["A","B"],"series":[{"label":"Value","data":[1,2]}]},
+  "tableSample": [{"category":"A","value":1},{"category":"B","value":2}],
+  "uris":{
+    "table":"gs://ai-data-analyser-files/users/.../results/<messageId>/table.json",
+    "metrics":"gs://.../metrics.json",
+    "chartData":"gs://.../chart_data.json",
+    "summary":"gs://.../summary.json"
+  }
+}}
 {"type":"ping"}
 ```
 
+Chart data schema (backend → frontend/Chart.js):
+```json
+{
+  "kind": "bar" | "line" | "pie",
+  "labels": ["x1", "x2", "x3"],
+  "series": [
+    { "label": "Series A", "data": [1, 2, 3] }
+  ],
+  "options": { /* optional hints */ }
+}
+```
+
 Behavior:
-- Hour/day quotas enforced.
-- If `runtime_flags.allowComplex=false`, COMPLEX requests fall back to templates.
-- Heartbeat: JSON `{ "type": "ping" }` every ~20–25 seconds.
+- Heartbeat: `{ "type": "ping" }` about every 20–25 seconds.
+- Hard timeout: 60s. On expiry emits `{"type":"error","data":{"code":"TIMEOUT_HARD"}}`.
+- Soft timeout: currently logs only (no partial-return yet).
+
+Error codes (non-exhaustive):
+- `MISSING_PARQUET` – cleaned.parquet not found
+- `DOWNLOAD_FAILED` – failed to download dataset artifacts
+- `CODEGEN_FAILED` – LLM code generation failure
+- `CODE_VALIDATION_FAILED` – AST/allowlist validation failure
+- `EXEC_FAILED` – sandboxed execution failed (stderr included)
+- `BAD_RESULT` – sandbox output not valid JSON/shape
+- `PERSIST_FAILED` – failed to write results to GCS
 
 ---
 

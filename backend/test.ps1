@@ -97,10 +97,31 @@ try {
     Write-Host "Firestore status: $status"
   } else {
     Write-Host "Firestore document retrieved (status field missing):"
-    $doc | ConvertTo-Json -Depth 8
   }
 } catch {
   Write-Host "Firestore read warning:" $_.Exception.Message
 }
-
-#test1
+# 6) Chat SSE smoke test (best-effort)
+$CHAT_URL = (gcloud functions describe chat --gen2 --region=$REGION --format "value(url)" | Out-String).Trim()
+Write-Host "CHAT_URL: $CHAT_URL"
+if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
+  $body = @{ uid = $UID; sessionId = $SID; datasetId = $resp.datasetId; question = "Top categories" } | ConvertTo-Json -Compress
+  $payloadPath = Join-Path $env:TEMP "chat_payload.json"
+  $body | Out-File -FilePath $payloadPath -Encoding utf8 -NoNewline
+  try {
+    & curl.exe -N `
+      -H "Origin: http://localhost:3000" `
+      -H "Content-Type: application/json" `
+      -H "X-User-Id: $UID" `
+      -H "X-Session-Id: $SID" `
+      --data-binary "@$payloadPath" `
+      --max-time 25 `
+      $CHAT_URL
+  } catch {
+    Write-Host "SSE test warning:" $_.Exception.Message
+  } finally {
+    if (Test-Path $payloadPath) { Remove-Item $payloadPath -Force }
+  }
+} else {
+  Write-Host "SSE test skipped: CHAT_URL invalid"
+}

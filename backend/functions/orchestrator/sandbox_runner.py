@@ -48,10 +48,11 @@ class _Validator(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
-            name = (alias.asname or alias.name).split(".")[0]
-            if name not in self.allowlist:
+            # Use the root module name, not the alias (e.g., 'pandas' for 'import pandas as pd')
+            root = (alias.name or "").split(".")[0]
+            if root not in self.allowlist:
                 self._err(f"Import not allowed: {alias.name}")
-            if any(name == p or name.startswith(p + ".") for p in FORBIDDEN_PREFIXES):
+            if root in FORBIDDEN_PREFIXES:
                 self._err(f"Forbidden import: {alias.name}")
         self.generic_visit(node)
 

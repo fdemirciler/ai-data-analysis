@@ -104,6 +104,16 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-09-28**
+  - Milestone 2: Implemented LLM-driven analysis with Gemini 2.5 Flash.
+    - Orchestrator (`backend/functions/orchestrator/`) now downloads `cleaned.parquet`, generates Python via LLM, validates with AST (allowlist: pandas, numpy, math, json), and executes in a sandboxed subprocess with a 60s hard timeout.
+    - Persists results to GCS: `table.json`, `metrics.json`, `chart_data.json`, `summary.json`; writes Firestore `messages/{messageId}` doc.
+    - SSE event flow: `received → validating → generating_code → running_fast → summarizing → persisting → done` (+ `ping`).
+    - CORS defaults to `http://localhost:3000`.
+  - Docs updated: `backend/docs/api.md` now documents SSE contract and `chartData` schema. `README.md` includes chat usage and env var notes.
+  - `backend/test.ps1` extended with a best-effort SSE smoke test.
+  - SSE behavior change: the orchestrator now closes the SSE stream immediately after the `done` event (removed keep-alive pings). This prevents client-side curl timeouts in smoke tests.
+  - Deployment split: created `backend/deploy-preprocess.ps1` (preprocess Cloud Run + Eventarc) and `backend/deploy-analysis.ps1` (Functions: `sign-upload-url`, `chat`). Prefer running these separately; avoid re-deploying preprocess unless needed.
 - **2025-09-27**
   - Standardized on `backend/deploy.ps1` as the only deployment method.
   - Removed `backend/cloudbuild.yaml` and all documentation references to Cloud Build.

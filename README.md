@@ -43,11 +43,30 @@ flowchart TD
   - `deploy.ps1` – One-shot provisioning and deploy script (script-relative paths)
   - `test.ps1` – Local smoke test (upload + artifact/Firestore checks)
 - `docs/` – API drafts and operational notes
-- `PROGRESS.md` – Ongoing progress log and architecture notes
-
 ## Getting started (quick)
 1. Ensure you’re on the correct project and have gcloud configured.
 2. Deploy using `./backend/deploy.ps1` (this is the only supported deployment method).
 3. Optionally run `./backend/test.ps1` to upload a sample CSV and verify artifacts and Firestore status.
+
+## Chat (SSE) – analysis stage
+
+- The `chat` Cloud Function streams events (SSE) while it:
+  - Generates Python with Gemini 2.5 Flash;
+  - Executes it in a sandbox (Pandas/Numpy only) with a 60s hard timeout;
+  - Persists `table.json`, `metrics.json`, `chart_data.json`, `summary.json` to GCS and a message doc to Firestore.
+
+Environment variables:
+- `GEMINI_API_KEY`: required for the `chat` function (pass via your shell before running `deploy.ps1`).
+- `FILES_BUCKET`: already set by `deploy.ps1` to `ai-data-analyser-files`.
+
+Quick SSE test (PowerShell, replace `<CHAT_URL>`):
+```powershell
+$body = @{ uid = "demo-uid"; sessionId = "demo-sid"; datasetId = "<datasetId>"; question = "Top categories" } | ConvertTo-Json -Compress
+curl.exe -N -H "Origin: http://localhost:3000" -H "Content-Type: application/json" -H "X-User-Id: demo-uid" --max-time 25 -d $body "<CHAT_URL>"
+```
+
+Frontend:
+- A minimal HTML/JS page (later) will render `chartData` using Chart.js and display the `tableSample` from the final SSE event.
+
 ## Status
 The preprocessing stage is fully functional. See `PROGRESS.md` for the latest changes and operational notes.

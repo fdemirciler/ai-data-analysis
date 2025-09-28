@@ -1,0 +1,66 @@
+# ---- OS generated files ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- IDE / Editor ----
+.vscode/
+.idea/
+*.swp
+
+# ---- Node / Frontend ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+build/
+dist/
+.cache/
+.parcel-cache/
+.eslintcache
+.turbo/
+.next/
+.out/
+coverage/
+
+# ---- Python / Backend ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+
+# Env & tooling
+.env
+.env.*
+.envrc
+.python-version
+# Keep sample env files under version control
+!.env.example
+!.env.sample
+!.env.local.example
+
+# Python tooling caches
+.mypy_cache/
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---- Logs ----
+logs/
+*.log
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- Test files ----
+test_files/
+
+final_project_design.md

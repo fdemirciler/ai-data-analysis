@@ -1,6 +1,5 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { User, Bot, Copy, Download, Check } from "lucide-react";
-import { Button } from "./ui/button";
 
 interface ChatMessageProps {
   role: "user" | "assistant";
@@ -23,143 +22,146 @@ export function ChatMessage({
   artifacts, 
   isStreaming 
 }: ChatMessageProps) {
-  const [copied, setCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
 
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCodeCopied(true);
+    setTimeout(() => setCodeCopied(false), 2000);
   };
 
-  const timeLabel = (() => {
-    const date = new Date(timestamp);
-    return Number.isNaN(date.getTime())
-      ? timestamp
-      : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  })();
+  const displayText = content.trim() || (isStreaming ? "Thinking..." : "");
 
-  const spinner = (
-    <span className="inline-flex h-4 w-4 items-center justify-center align-middle ml-2">
-      <span className="h-3 w-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />
-    </span>
-  );
-
-  if (role === "user") {
-    return (
-      <div className="flex justify-center px-4">
-        <div className="flex w-full max-w-3xl justify-end gap-3">
-          <div className="flex flex-col items-end max-w-[70%] space-y-1">
-            <div className="rounded-2xl bg-[#10a37f] px-4 py-2 text-sm text-white whitespace-pre-wrap break-words">
-              {content}
-            </div>
-            <span className="text-xs text-gray-400 dark:text-gray-500">{timeLabel}</span>
-          </div>
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#10a37f] text-white">
-            <User className="h-4 w-4" />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const trimmed = content.trim();
-  const displayText = trimmed || (isStreaming ? "Analyzing your data..." : "");
-  const lines = displayText ? displayText.split("\n") : [];
-
+  // Both user and assistant messages use the same left-aligned layout
   return (
-    <div className="flex justify-center px-4">
-      <div className="flex w-full max-w-3xl items-start gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#10a37f] text-white">
-          <Bot className="h-4 w-4" />
+    <div className="group w-full py-8 px-4">
+      <div className="max-w-3xl mx-auto flex gap-6 items-start">
+        {/* Avatar - always on left */}
+        <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-sm font-medium ${
+          role === "user" 
+            ? "bg-purple-600" 
+            : "bg-emerald-600"
+        }`}>
+          {role === "user" ? (
+            <User className="h-4 w-4" strokeWidth={2} />
+          ) : (
+            <Bot className="h-4 w-4" strokeWidth={2} />
+          )}
         </div>
-        <div className="flex-1 space-y-3">
-          <div className="markdown prose w-full break-words text-gray-800 dark:text-gray-100">
-            {lines.length > 0 ? (
-              lines.map((line, index) => (
-                <p key={index} className="mb-2 last:mb-0 flex items-center">
-                  <span>{line}</span>
-                  {isStreaming && index === lines.length - 1 && spinner}
-                </p>
-              ))
-            ) : null}
-          </div>
 
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          {/* Message card */}
+          <div className="bg-white dark:bg-gray-900 border border-black/10 rounded-xl px-5 py-4">
+            <div className="space-y-4">
+          {/* Text content */}
+          {displayText && (
+            <div className="text-[15px] leading-[1.7] text-gray-800 dark:text-gray-200">
+              {displayText.split('\n').map((line, idx) => (
+                <p key={idx} className="mb-4 last:mb-0">
+                  {line || '\u00A0'}
+                  {isStreaming && idx === displayText.split('\n').length - 1 && (
+                    <span className="inline-flex ml-1 align-middle">
+                      <span className="w-1 h-4 bg-gray-400 dark:bg-gray-500 animate-pulse" />
+                    </span>
+                  )}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {/* Code block */}
           {code && (
-            <div className="bg-black rounded-md mb-4">
-              <div className="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md">
-                <span>Code</span>
+            <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800">
+                <span className="text-xs font-medium text-gray-600 dark:text-gray-400">python</span>
                 <button
-                  className="flex ml-auto gap-2"
                   onClick={() => copyToClipboard(code)}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
                 >
-                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {copied ? "Copied!" : "Copy code"}
+                  {codeCopied ? (
+                    <>
+                      <Check className="h-3 w-3" />
+                      <span>Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>Copy code</span>
+                    </>
+                  )}
                 </button>
               </div>
-              <div className="p-4 overflow-y-auto">
-                <code className="!whitespace-pre text-gray-100 text-sm">
-                  {code}
-                </code>
+              <div className="p-4 bg-[#1e1e1e] overflow-x-auto">
+                <code className="text-[13px] text-gray-100 font-mono whitespace-pre leading-relaxed">{code}</code>
               </div>
             </div>
           )}
 
+          {/* Chart */}
           {chart && (
-            <div className="bg-white dark:bg-gray-800 border rounded-lg p-4 mb-4">
-              <div className="h-64 flex items-center justify-center text-gray-500">
-                [Chart would render here with Chart.js]
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-6 bg-gray-50 dark:bg-gray-800">
+              <div className="h-64 flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
+                📊 Chart visualization
               </div>
             </div>
           )}
 
+          {/* Table */}
           {table && table.length > 0 && (
-            <div className="overflow-x-auto mb-4">
-              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead className="bg-gray-50 dark:bg-gray-800">
-                  <tr>
-                    {Object.keys(table[0]).map((header) => (
-                      <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                        {header}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                  {table.slice(0, 10).map((row, index) => (
-                    <tr key={index}>
-                      {Object.values(row).map((cell, cellIndex) => (
-                        <td key={cellIndex} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                          {String(cell)}
-                        </td>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                      {Object.keys(table[0]).map((header) => (
+                        <th
+                          key={header}
+                          className="px-4 py-2.5 text-left text-xs font-medium text-gray-600 dark:text-gray-400"
+                        >
+                          {header}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {table.slice(0, 10).map((row, idx) => (
+                      <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                        {Object.values(row).map((cell, cellIdx) => (
+                          <td key={cellIdx} className="px-4 py-2.5 text-gray-900 dark:text-gray-100">
+                            {String(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {table.length > 10 && (
-                <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500">
+                <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400">
                   Showing 10 of {table.length} rows
                 </div>
               )}
             </div>
           )}
 
+          {/* Artifacts */}
           {artifacts && artifacts.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-4">
-              {artifacts.map((artifact, index) => (
+            <div className="flex flex-wrap gap-2">
+              {artifacts.map((artifact, idx) => (
                 <button
-                  key={index}
+                  key={idx}
                   onClick={() => window.open(artifact.url, "_blank")}
-                  className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
                 >
-                  <Download className="h-3 w-3 mr-1" />
+                  <Download className="h-3.5 w-3.5" />
                   {artifact.filename}
                 </button>
               ))}
             </div>
           )}
-
-          <div className="text-xs text-gray-400 dark:text-gray-500">{timeLabel}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

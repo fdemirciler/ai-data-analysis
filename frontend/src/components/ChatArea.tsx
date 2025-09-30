@@ -29,7 +29,7 @@ export function ChatArea({ messages }: ChatAreaProps) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-4xl font-semibold text-gray-700 dark:text-gray-300">ChatGPT</h1>
+          <h1 className="text-4xl font-semibold text-gray-700 dark:text-gray-300">AI Data Analyst</h1>
         </div>
       </div>
     );

@@ -104,6 +104,16 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-09-29**
+  - **Frontend Redesign**: Complete UI overhaul with ChatGPT-style interface.
+    - Created 4 new components: `NewSidebar.tsx` (collapsible with icon/expanded states), `FloatingChatInput.tsx` (overlay at bottom), `NewChatArea.tsx` (infinite scroll), `FloatingControls.tsx` (minimal top bar).
+    - Removed visible header/footer for immersive experience; floating controls with backdrop blur.
+    - Sidebar displays last 5 chat sessions, user profile with avatar, and daily usage indicator (100 requests/day limit).
+    - Chat input: auto-resizing textarea, file attachment preview, keyboard shortcuts (Enter to send, Shift+Enter for new line).
+    - Fully integrated with existing `ChatContext` and `AuthContext`; uses real SSE streaming from `services/api.ts`.
+    - Firebase config template created at `frontend/src/lib/firebase.ts` with placeholders for future migration.
+    - Updated `main.tsx` to use new `AppFinal.tsx` as entry point.
+    - Documentation: Created `FRONTEND_REDESIGN.md` with comprehensive design system, component specs, and migration guide.
 - **2025-09-28**
   - Milestone 2: Implemented LLM-driven analysis with Gemini 2.5 Flash.
     - Orchestrator (`backend/functions/orchestrator/`) now downloads `cleaned.parquet`, generates Python via LLM, validates with AST (allowlist: pandas, numpy, math, json), and executes in a sandboxed subprocess with a 60s hard timeout.

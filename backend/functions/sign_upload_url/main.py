@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
+import time
 
 from google.cloud import storage
 from google.cloud import firestore
@@ -15,6 +16,7 @@ FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
 PROJECT_ID = os.getenv("GCP_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT", "ai-data-analyser"))
 TTL_DAYS = int(os.getenv("TTL_DAYS", "1"))
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
+SIGNING_CREDS_TTL_SECONDS = int(os.getenv("SIGNING_CREDS_TTL_SECONDS", "3300"))  # ~55m
 
 ALLOWED_MIME = {
     "text/csv": ".csv",
@@ -39,6 +41,10 @@ def _require_headers(request) -> Tuple[str, str]:
     return uid, sid
 
 
+_CACHED_SIGNING_CREDS = None
+_CACHED_EXPIRES_AT = 0.0
+
+
 def _impersonated_signing_credentials(sa_email: str):
     """Create impersonated credentials for signing using IAM Credentials API.
 
@@ -46,21 +52,32 @@ def _impersonated_signing_credentials(sa_email: str):
     on the target principal (can be itself). Also requires the
     iamcredentials.googleapis.com API to be enabled.
     """
+    global _CACHED_SIGNING_CREDS, _CACHED_EXPIRES_AT
+
+    # Cache hit
+    now = time.time()
+    if _CACHED_SIGNING_CREDS is not None and now < _CACHED_EXPIRES_AT:
+        return _CACHED_SIGNING_CREDS
+
     if not sa_email:
         # Fall back to default credentials; will likely fail signing if no private key
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        return creds
+        _CACHED_SIGNING_CREDS = creds
+        _CACHED_EXPIRES_AT = now + SIGNING_CREDS_TTL_SECONDS
+        return _CACHED_SIGNING_CREDS
 
     source_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     if getattr(source_creds, "token", None) is None:
         source_creds.refresh(google.auth.transport.requests.Request())
 
-    return impersonated_credentials.Credentials(
+    _CACHED_SIGNING_CREDS = impersonated_credentials.Credentials(
         source_credentials=source_creds,
         target_principal=sa_email,
         target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
         lifetime=3600,
     )
+    _CACHED_EXPIRES_AT = now + SIGNING_CREDS_TTL_SECONDS
+    return _CACHED_SIGNING_CREDS
 
 
 def sign_upload_url(request):

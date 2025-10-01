@@ -118,10 +118,42 @@ if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
       --max-time 25 `
       $CHAT_URL
   } catch {
-    Write-Host "SSE test warning:" $_.Exception.Message
   } finally {
     if (Test-Path $payloadPath) { Remove-Item $payloadPath -Force }
   }
 } else {
   Write-Host "SSE test skipped: CHAT_URL invalid"
+}
+
+# =============================
+# Optional: XLSX smoke test
+# =============================
+try {
+  $XLSX_FILE = (Join-Path $ROOT_DIR "test_files\basic.xlsx")
+  if (-not (Test-Path $XLSX_FILE)) {
+    $maybe = Get-ChildItem -Path (Join-Path $ROOT_DIR "test_files") -Filter *.xlsx -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($maybe) { $XLSX_FILE = $maybe.FullName } else { $XLSX_FILE = $null }
+  }
+
+  if ($XLSX_FILE -and (Test-Path $XLSX_FILE)) {
+    Write-Host "Running XLSX smoke test with: $XLSX_FILE"
+    $MIME2 = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    $SIZE2 = (Get-Item $XLSX_FILE).Length
+    $FILENAME2 = [System.IO.Path]::GetFileName($XLSX_FILE)
+    $encName2 = [System.Uri]::EscapeDataString($FILENAME2)
+    $encMime2 = [System.Uri]::EscapeDataString($MIME2)
+    $reqUri2 = ("{0}?filename={1}&size={2}&type={3}" -f $SIGN_URL, $encName2, $SIZE2, $encMime2)
+
+    $headers2 = @{ "X-User-Id" = $UID; "X-Session-Id" = $SID }
+    $resp2 = Invoke-RestMethod -Uri $reqUri2 -Headers $headers2 -Method GET
+    if (-not $resp2.url) { throw "Signed URL missing for XLSX" }
+    Invoke-WebRequest -Uri $resp2.url -Method PUT -InFile $XLSX_FILE -ContentType $MIME2 | Out-Null
+    Write-Host "XLSX upload complete."
+    Start-Sleep -Seconds 30
+    gcloud storage ls "gs://$BUCKET/users/$UID/sessions/$SID/datasets/$($resp2.datasetId)/**"
+  } else {
+    Write-Host "XLSX smoke test skipped: no .xlsx file found in test_files."
+  }
+} catch {
+  Write-Host "XLSX smoke test warning:" $_.Exception.Message
 }

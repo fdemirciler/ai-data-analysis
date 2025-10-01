@@ -38,7 +38,10 @@ gcloud run deploy preprocess-svc `
   --source="$SRC_RUN" `
   --service-account="$SERVICE_ACCOUNT" `
   --set-build-env-vars="GOOGLE_PYTHON_VERSION=3.12" `
-  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1" `
+  --cpu=2 `
+  --memory=2Gi `
+  --concurrency=10 `
+  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1,PREPROCESS_ENGINE=polars" `
   --no-allow-unauthenticated
 
 # ==================================================

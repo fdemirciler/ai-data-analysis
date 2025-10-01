@@ -20,6 +20,7 @@ it follows the same principles and payload structure agreed for this project.
 """
 from __future__ import annotations
 
+import io
 import math
 import re
 from dataclasses import dataclass
@@ -69,8 +70,13 @@ def _load_raw(local_path: str) -> Tuple[pd.DataFrame, str]:
         df = pd.read_excel(local_path, sheet_name=0, header=None, dtype=object)
         kind = "excel"
     else:
-        # CSV with python engine for robustness
-        df = pd.read_csv(local_path, header=None, dtype=object, engine="python")
+        # CSV fast path: C engine + Arrow-backed dtypes for speed/memory
+        df = pd.read_csv(
+            local_path,
+            header=None,
+            engine="c",
+            dtype_backend="pyarrow",
+        )
         kind = "csv"
     return df, kind
 
@@ -254,6 +260,58 @@ def process_file_to_artifacts(
     metric_rename_heuristic: bool = False,  # kept for compatibility; not used (non-destructive)
 ) -> ProcessResult:
     raw_df, file_kind = _load_raw(local_path)
+    return process_df_to_artifacts(
+        raw_df,
+        file_kind,
+        sample_rows_for_llm=sample_rows_for_llm,
+        metric_rename_heuristic=metric_rename_heuristic,
+    )
+
+
+def process_bytes_to_artifacts(
+    data: bytes,
+    kind: str,
+    *,
+    sample_rows_for_llm: int = 50,
+    metric_rename_heuristic: bool = False,
+) -> ProcessResult:
+    """In-memory variant of process_file_to_artifacts.
+
+    Parameters
+    - data: raw file bytes
+    - kind: "csv" or "excel"
+    - sample_rows_for_llm: number of sampled rows to include in payload.sample_rows
+    - metric_rename_heuristic: kept for API compatibility
+    """
+    if kind not in ("csv", "excel"):
+        raise ValueError("kind must be 'csv' or 'excel'")
+    if kind == "excel":
+        raw_df = pd.read_excel(io.BytesIO(data), sheet_name=0, header=None, dtype=object)
+        file_kind = "excel"
+    else:
+        # CSV fast path from bytes
+        raw_df = pd.read_csv(
+            io.BytesIO(data),
+            header=None,
+            engine="c",
+            dtype_backend="pyarrow",
+        )
+        file_kind = "csv"
+    return process_df_to_artifacts(
+        raw_df,
+        file_kind,
+        sample_rows_for_llm=sample_rows_for_llm,
+        metric_rename_heuristic=metric_rename_heuristic,
+    )
+
+
+def process_df_to_artifacts(
+    raw_df: pd.DataFrame,
+    file_kind: str,
+    *,
+    sample_rows_for_llm: int = 50,
+    metric_rename_heuristic: bool = False,
+) -> ProcessResult:
     rows_before = raw_df.shape[0]
 
     work = _drop_fully_blank_rows(raw_df).reset_index(drop=True)

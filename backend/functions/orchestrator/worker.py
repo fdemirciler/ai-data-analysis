@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import io
 import json
+import base64
 import sys
 import types
 
 import pandas as pd  # noqa: F401  (provided as pd)
 import numpy as np  # noqa: F401  (provided as np)
+import pyarrow as pa  # type: ignore
 
 ALLOWED_IMPORTS = {"pandas", "numpy", "math", "json"}
 
@@ -93,14 +95,27 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
         code = payload.get("code", "")
-        parquet_path = payload["parquet_path"]
+        parquet_b64 = payload.get("parquet_b64")
+        arrow_ipc_b64 = payload.get("arrow_ipc_b64")
+        parquet_path = payload.get("parquet_path")
         ctx = payload.get("ctx", {})
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"Invalid input: {e}\n")
         return 1
 
     try:
-        df = pd.read_parquet(parquet_path)
+        if arrow_ipc_b64:
+            ipc_bytes = base64.b64decode(arrow_ipc_b64)
+            with pa.ipc.open_stream(ipc_bytes) as reader:
+                table = reader.read_all()
+            df = table.to_pandas()
+        elif parquet_b64:
+            data = base64.b64decode(parquet_b64)
+            df = pd.read_parquet(io.BytesIO(data))
+        elif parquet_path:
+            df = pd.read_parquet(parquet_path)
+        else:
+            raise ValueError("Missing parquet_b64 or parquet_path")
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"Failed to read parquet: {e}\n")
         return 1

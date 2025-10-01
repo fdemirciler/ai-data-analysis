@@ -66,7 +66,7 @@ gcloud functions deploy chat `
   --allow-unauthenticated `
   --service-account="$SERVICE_ACCOUNT" `
   --memory=512Mi `
-  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID" `
+  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,ORCH_IPC_MODE=base64,GEMINI_FUSED=1" `
   --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
 # ====================

@@ -4,8 +4,8 @@ Region: `europe-west4`  •  Project: `ai-data-analyser`  •  Bucket: `ai-data-
 
 This service is the HTTP target of an Eventarc trigger for `google.cloud.storage.object.v1.finalized` events. When a raw file is uploaded under the `users/{uid}/sessions/{sid}/datasets/{datasetId}/raw/` prefix, it:
 
-1. Downloads the raw CSV/XLSX to `/tmp`.
-2. Runs the pipeline (based on your `data_processing_profiling.md`).
+1. Downloads the raw CSV/XLSX bytes into memory (no `/tmp` in the happy path).
+2. Runs the pipeline adapter (Polars CSV by default; Excel via pandas) to clean + profile.
 3. Writes:
    - `cleaned/cleaned.parquet`
    - `metadata/payload.json`
@@ -28,13 +28,15 @@ curl http://localhost:8080/healthz
 
 ## Deploy (sketch)
 
-From the repository root, run:
+From the repository root, you can deploy just this service via:
 
 ```
-./backend/deploy.ps1
+./backend/deploy-preprocess.ps1
 ```
 
-This is the only supported deployment method. The script enables required APIs, deploys Cloud Run `preprocess-svc`, deploys the supporting Cloud Functions, and ensures the Eventarc trigger. After deployment, you can run `./backend/test.ps1` for a quick smoke test.
+The script enables required APIs (once), deploys Cloud Run `preprocess-svc`, and ensures the Eventarc trigger. After deployment, run `./backend/test.ps1` for a quick smoke test.
+
+If you prefer a unified flow for all backend components, use `./backend/deploy.ps1`.
 
 ## Notes
 
@@ -42,6 +44,12 @@ This is the only supported deployment method. The script enables required APIs, 
 - No column renames; instead flag potential dimensions in the payload.
 - Deterministic sample of 50 rows for payload; truncate long strings.
 - Parquet written with `pyarrow` and compression.
+
+### Engine selection
+
+- Default engine for CSV is Polars. Set via env var `PREPROCESS_ENGINE=polars|pandas` (default: `polars`).
+- Excel files are handled by pandas (first sheet) regardless of engine.
+- Core cleaning/payload logic is centralized in `pipeline_adapter.process_df_to_artifacts()` and shared by both adapters.
 
 ---
 

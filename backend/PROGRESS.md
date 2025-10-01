@@ -104,6 +104,40 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-10-01**
+  - Backend Performance – Step 1 implemented.
+    - Orchestrator (`backend/functions/orchestrator/main.py`)
+      - Switched to base64 IPC: downloads `cleaned.parquet` as bytes and passes to worker over stdin JSON (`parquet_b64`). Fallback to file path via `ORCH_IPC_MODE=filepath`.
+      - Uses `payload.json` keys (`sample_rows`, `columns`) for LLM context; avoids parquet `head()` when payload exists.
+      - Added metadata-only fast path: schema/columns/row-count questions are answered from payload without loading parquet.
+      - Parallelized GCS result uploads (table/metrics/chart_data/summary) with `ThreadPoolExecutor`.
+      - Fused Gemini call: `generate_code_and_summary()` returns code + short summary in one request.
+    - Worker (`backend/functions/orchestrator/worker.py`)
+      - Accepts `parquet_b64` (base64) and decodes into an in-memory DataFrame; retains `parquet_path` fallback.
+    - Gemini client (`backend/functions/orchestrator/gemini_client.py`)
+      - Added `generate_code_and_summary()` with structured parsing; gated by `GEMINI_FUSED` env (default on).
+    - Preprocess service (`backend/run-preprocess/main.py`)
+      - Full in-memory I/O: `download_as_bytes()` in, `upload_from_file(BytesIO)` out; no `/tmp` in the happy path.
+      - Parallelized uploads of cleaned parquet, `payload.json`, and `cleaning_report.json`.
+    - Pipeline adapter (`backend/run-preprocess/pipeline_adapter.py`)
+      - Added `process_bytes_to_artifacts(data, kind, ...)` to mirror file-based API for in-memory processing.
+    - Deployment scripts
+      - `backend/deploy-preprocess.ps1`: set `--cpu=2 --memory=2Gi --concurrency=10` and `PREPROCESS_ENGINE=polars` (engine switch to be implemented in Step 2).
+      - `backend/deploy-analysis.ps1`: set `ORCH_IPC_MODE=base64` and `GEMINI_FUSED=1` for `chat` function.
+    - Flags and rollback
+      - `ORCH_IPC_MODE=base64|filepath`, `GEMINI_FUSED=1|0`, `PREPROCESS_ENGINE=polars|pandas` (engine wiring in Step 2).
+    - Observability
+      - Parallelized upload steps; will add stage timing benchmarks in a follow-up.
+
+- **2025-10-01**
+  - Backend Performance – Step 2 implemented.
+    - Preprocess engine defaulted to Polars for CSV via `run-preprocess/pipeline_adapter_polars.py`; Excel remains via pandas.
+    - Engine selection via `PREPROCESS_ENGINE=polars|pandas` (default: polars) in `run-preprocess/main.py` with safe fallback.
+    - Extracted `process_df_to_artifacts()` in `run-preprocess/pipeline_adapter.py` to centralize cleaning/payload logic (shared by both adapters).
+    - Dependencies: added `polars[xlsx]==1.7.1`, aligned `numpy==2.0.2` in `run-preprocess/requirements.txt`.
+    - Deployed new `preprocess-svc` revision with `--cpu=2 --memory=2Gi --concurrency=10` and `PREPROCESS_ENGINE=polars`.
+    - Next: run `backend/test.ps1` to smoke test end-to-end (upload → Eventarc → artifacts + Firestore).
+
 - **2025-09-29**
   - **Frontend Redesign**: Complete UI overhaul with ChatGPT-style interface.
     - Created 4 new components: `NewSidebar.tsx` (collapsible with icon/expanded states), `FloatingChatInput.tsx` (overlay at bottom), `NewChatArea.tsx` (infinite scroll), `FloatingControls.tsx` (minimal top bar).

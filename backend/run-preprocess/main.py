@@ -2,6 +2,9 @@ import os
 import json
 import logging
 import base64
+import io
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
@@ -52,6 +55,11 @@ the Cloud Run container can start and bind to PORT quickly. The actual import
 occurs on first use inside the request handler.
 """
 _process_file_to_artifacts = None  # type: ignore
+_process_bytes_to_artifacts = None  # type: ignore
+
+def _get_engine() -> str:
+    eng = os.getenv("PREPROCESS_ENGINE", "polars").strip().lower()
+    return "polars" if eng == "polars" else "pandas"
 
 def get_process_file_to_artifacts():
     """Import and cache process_file_to_artifacts lazily.
@@ -62,15 +70,50 @@ def get_process_file_to_artifacts():
     global _process_file_to_artifacts
     if _process_file_to_artifacts is not None:
         return _process_file_to_artifacts
+    engine = _get_engine()
+    # Prefer polars adapter when requested, else default to pandas adapter
     try:
-        from .pipeline_adapter import process_file_to_artifacts as _fn  # type: ignore
+        if engine == "polars":
+            try:
+                from .pipeline_adapter_polars import process_file_to_artifacts as _fn  # type: ignore
+            except Exception:
+                from pipeline_adapter_polars import process_file_to_artifacts as _fn  # type: ignore
+            logging.info("preprocess engine: polars")
+        else:
+            raise ImportError("force_pandas")
+    except Exception:
+        # Fallback to pandas adapter
+        try:
+            from .pipeline_adapter import process_file_to_artifacts as _fn  # type: ignore
+        except Exception:
+            from pipeline_adapter import process_file_to_artifacts as _fn  # type: ignore
+        logging.info("preprocess engine: pandas (fallback)")
+    _process_file_to_artifacts = _fn
+    return _fn
+
+
+def get_process_bytes_to_artifacts():
+    """Import and cache process_bytes_to_artifacts lazily."""
+    global _process_bytes_to_artifacts
+    if _process_bytes_to_artifacts is not None:
+        return _process_bytes_to_artifacts
+    engine = _get_engine()
+    try:
+        if engine == "polars":
+            try:
+                from .pipeline_adapter_polars import process_bytes_to_artifacts as _fn  # type: ignore
+            except Exception:
+                from pipeline_adapter_polars import process_bytes_to_artifacts as _fn  # type: ignore
+            logging.info("preprocess engine: polars")
+        else:
+            raise ImportError("force_pandas")
     except Exception:
         try:
-            from pipeline_adapter import process_file_to_artifacts as _fn  # type: ignore
-        except Exception as e:  # pragma: no cover - surfaced in logs at runtime
-            logging.exception("Failed to import pipeline_adapter: %s", e)
-            raise
-    _process_file_to_artifacts = _fn
+            from .pipeline_adapter import process_bytes_to_artifacts as _fn  # type: ignore
+        except Exception:
+            from pipeline_adapter import process_bytes_to_artifacts as _fn  # type: ignore
+        logging.info("preprocess engine: pandas (fallback)")
+    _process_bytes_to_artifacts = _fn
     return _fn
 
 
@@ -120,6 +163,7 @@ async def handle_eventarc(request: Request) -> Response:
         envelope = {}
 
     data = None
+    t0 = time.monotonic()
 
     # Structured CloudEvent
     if isinstance(envelope, dict) and "data" in envelope and isinstance(envelope["data"], dict):
@@ -176,44 +220,51 @@ async def handle_eventarc(request: Request) -> Response:
     firestore_client = firestore.Client(project=PROJECT_ID)
 
     try:
-        # 1) Download raw to /tmp
+        # 1) Download raw into memory
         raw_blob = storage_client.bucket(bucket).blob(name)
-        ext = ".xlsx" if is_xlsx else ".csv"
-        tmp_raw_path = f"/tmp/{uid}_{sid}_{dataset_id}_raw{ext}"
-        raw_blob.download_to_filename(tmp_raw_path)
+        raw_bytes = raw_blob.download_as_bytes()
+        kind = "excel" if is_xlsx else "csv"
+        t_download = time.monotonic()
 
-        # 2) Run pipeline adapter (lazy import on first use)
-        result = get_process_file_to_artifacts()( 
-            tmp_raw_path,
+        # 2) Run pipeline adapter (bytes variant; lazy import on first use)
+        result = get_process_bytes_to_artifacts()( 
+            raw_bytes,
+            kind,
             sample_rows_for_llm=50,
             metric_rename_heuristic=False,
         )
+        t_process = time.monotonic()
 
-        # 3) Write artifacts to GCS under dataset prefix
+        # 3) Write artifacts to GCS under dataset prefix (in parallel)
         prefix = f"users/{uid}/sessions/{sid}/datasets/{dataset_id}"
         cleaned_path = f"{prefix}/cleaned/cleaned.parquet"
         payload_path = f"{prefix}/metadata/payload.json"
         report_path = f"{prefix}/reports/cleaning_report.json"
 
-        # 3a) Save cleaned parquet to /tmp and upload
-        tmp_cleaned_path = f"/tmp/{uid}_{sid}_{dataset_id}_cleaned.parquet"
-        # Ensure pyarrow engine
-        result.cleaned_df.to_parquet(tmp_cleaned_path, engine="pyarrow", index=False)
-        storage_client.bucket(bucket).blob(cleaned_path).upload_from_filename(
-            tmp_cleaned_path, content_type="application/octet-stream"
-        )
+        # Build in-memory parquet
+        parquet_buf = io.BytesIO()
+        result.cleaned_df.to_parquet(parquet_buf, engine="pyarrow", index=False)
+        parquet_size = parquet_buf.getbuffer().nbytes
+        parquet_buf.seek(0)
+        t_build = time.monotonic()
 
-        # 3b) Upload payload.json
         payload_data = json.dumps(result.payload, ensure_ascii=False).encode("utf-8")
-        storage_client.bucket(bucket).blob(payload_path).upload_from_string(
-            payload_data, content_type="application/json; charset=utf-8"
-        )
-
-        # 3c) Upload cleaning_report.json
         report_data = json.dumps(result.cleaning_report, ensure_ascii=False).encode("utf-8")
-        storage_client.bucket(bucket).blob(report_path).upload_from_string(
-            report_data, content_type="application/json; charset=utf-8"
-        )
+
+        bkt = storage_client.bucket(bucket)
+        cleaned_blob = bkt.blob(cleaned_path)
+        payload_blob = bkt.blob(payload_path)
+        report_blob = bkt.blob(report_path)
+
+        # Upload three artifacts in parallel
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            futs = []
+            futs.append(ex.submit(cleaned_blob.upload_from_file, parquet_buf, size=parquet_size, content_type="application/octet-stream"))
+            futs.append(ex.submit(payload_blob.upload_from_string, payload_data, content_type="application/json; charset=utf-8"))
+            futs.append(ex.submit(report_blob.upload_from_string, report_data, content_type="application/json; charset=utf-8"))
+            for f in futs:
+                f.result()
+        t_uploads = time.monotonic()
 
         cleaned_uri = f"gs://{bucket}/{cleaned_path}"
         payload_uri = f"gs://{bucket}/{payload_path}"
@@ -238,6 +289,7 @@ async def handle_eventarc(request: Request) -> Response:
             },
             merge=True,
         )
+        t_firestore = time.monotonic()
 
         logging.info(
             json.dumps(
@@ -254,6 +306,20 @@ async def handle_eventarc(request: Request) -> Response:
                 }
             )
         )
+        # timings
+        timings = {
+            "event": "preprocess_timings",
+            "uid": uid,
+            "sid": sid,
+            "datasetId": dataset_id,
+            "download_s": round(t_download - t0, 3),
+            "process_s": round(t_process - t_download, 3),
+            "build_parquet_s": round(t_build - t_process, 3),
+            "uploads_s": round(t_uploads - t_build, 3),
+            "firestore_s": round(t_firestore - t_uploads, 3),
+            "total_s": round(t_firestore - t0, 3),
+        }
+        logging.info(json.dumps(timings))
         return Response(status_code=204)
 
     except Exception as e:  # noqa: BLE001 (broad for last-resort error path)

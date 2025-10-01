@@ -146,3 +146,76 @@ def _extract_code_block(text: str) -> str:
         return m.group(1).strip()
     # Fallback: raw text
     return text.strip()
+
+
+def generate_code_and_summary(question: str, schema_snippet: str, sample_rows: list[dict], row_limit: int = 200) -> tuple[str, str]:
+    """Return (code, summary) using a single fused call when GEMINI_FUSED is truthy.
+
+    If GEMINI_FUSED is disabled, fall back to two calls: generate_analysis_code + generate_summary.
+    """
+    fused = os.getenv("GEMINI_FUSED", "1").lower() not in ("0", "false", "no")
+    if not fused:
+        code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
+        summary = generate_summary(question, sample_rows[: min(len(sample_rows), 5)], {"notice": "pre-run"})
+        return code, summary
+
+    model = _ensure_model()
+    sample_preview = sample_rows[: min(len(sample_rows), 10)]
+    prompt = (
+        "You are a Python data analysis assistant. Produce both the code and a short summary in a structured output.\n\n"
+        "Requirements for CODE:\n"
+        "- Define: def run(df, ctx):\n"
+        "- Use only: pandas as pd, numpy as np, math, json.\n"
+        f"- Limit table rows to <= {row_limit}.\n\n"
+        "SUMMARY: one short paragraph summarizing expected outcome.\n\n"
+        "Return EXACTLY in this format (and nothing else):\n\n"
+        "[CODE_START]\n"
+        "```python\n"
+        "# code here\n"
+        "```\n"
+        "[CODE_END][SUMMARY_START]Your short summary here[SUMMARY_END]\n\n"
+        f"Schema:\n{schema_snippet}\n\n"
+        f"Sample rows (truncated):\n{sample_preview}\n\n"
+        f"User question: {question}\n"
+    )
+    resp = model.generate_content(
+        prompt,
+        generation_config={"max_output_tokens": 768, "temperature": 0.2},
+    )
+    text = ""
+    try:
+        text = resp.text or ""
+    except Exception:
+        text = ""
+
+    # Parse structured markers first
+    import re as _re
+    code = ""
+    summary = ""
+    try:
+        m_code_block = _re.search(r"\[CODE_START\](.*?)\[CODE_END\]", text, flags=_re.DOTALL | _re.IGNORECASE)
+        if m_code_block:
+            code_section = m_code_block.group(1)
+            # Within code section, prefer ```python fenced block
+            code = _extract_code_block(code_section)
+        else:
+            code = _extract_code_block(text)
+
+        m_sum = _re.search(r"\[SUMMARY_START\](.*?)\[SUMMARY_END\]", text, flags=_re.DOTALL | _re.IGNORECASE)
+        if m_sum:
+            summary = m_sum.group(1).strip()
+        else:
+            # Fallback: best-effort extract last paragraph
+            summary = (text.strip().split("\n\n")[-1] or "").strip()
+    except Exception:
+        # Fallback to two-call path if parsing failed badly
+        code = _extract_code_block(text)
+        if not code:
+            code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
+        summary = generate_summary(question, sample_rows[: min(len(sample_rows), 5)], {"notice": "pre-run"})
+
+    if not code:
+        code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
+    if not summary:
+        summary = "Analysis planned. Executed results will follow."
+    return code, summary

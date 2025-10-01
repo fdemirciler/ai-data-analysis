@@ -1,0 +1,7 @@
+@import "tailwindcss";
+/* Project design tokens and custom layers */
+@import "./globals.css";
+
+/* Tell Tailwind v4 where to scan for class usage */
+@source "../../index.html";
+@source "../**/*.{js,jsx,ts,tsx}";

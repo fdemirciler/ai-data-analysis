@@ -70,7 +70,7 @@ export function ChatSidebar({
 
             {/* Recent Chats Header */}
             <div className="px-3 py-2">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-sidebar-foreground">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-sidebar-foreground pl-4">
                 <History className="h-4 w-4" />
                 <span>Recent Chats</span>
               </h2>

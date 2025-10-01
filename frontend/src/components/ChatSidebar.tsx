@@ -49,7 +49,7 @@ export function ChatSidebar({
         {isOpen ? (
           <>
             {/* Header - Expanded */}
-            <div className="h-14 p-3 flex items-center justify-between border-b border-sidebar-border">
+            <div className="h-14 p-3 flex items-center justify-between">
               <Button
                 onClick={onNewChat}
                 variant="ghost"
@@ -91,7 +91,7 @@ export function ChatSidebar({
                   >
                     <button
                       onClick={() => onSelectConversation(conversation.id)}
-                      className="truncate flex-1 text-sm text-left"
+                      className="truncate flex-1 text-sm text-left pl-4"
                     >
                       {conversation.title}
                     </button>
@@ -138,7 +138,7 @@ export function ChatSidebar({
         ) : (
           <>
             {/* Header - Collapsed */}
-            <div className="p-2 flex flex-col items-center gap-2 border-b border-sidebar-border">
+            <div className="p-2 flex flex-col items-center gap-2">
               <Button
                 variant="ghost"
                 size="icon"

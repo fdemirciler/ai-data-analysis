@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ChatMessage, type Message } from "./components/ChatMessage";
 import { ChatInput } from "./components/ChatInput";
@@ -59,18 +59,25 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>("1");
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const prevConvIdRef = useRef<string | null>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages or typing indicator changes
   useEffect(() => {
-    if (scrollRef.current) {
-      const scrollElement = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
-      if (scrollElement) {
-        scrollElement.scrollTop = scrollElement.scrollHeight;
-      }
-    }
-  }, [activeConversation?.messages]);
+    const behavior: ScrollBehavior =
+      prevConvIdRef.current && prevConvIdRef.current === activeConversationId
+        ? 'smooth'
+        : 'auto';
+
+    // Defer to next frame so DOM has updated
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+    });
+    prevConvIdRef.current = activeConversationId;
+    return () => cancelAnimationFrame(id);
+  }, [activeConversationId, activeConversation?.messages.length, isTyping]);
 
   const handleNewChat = () => {
     const newConversation: Conversation = {
@@ -227,6 +234,8 @@ export default function App() {
                   </div>
                 </div>
               )}
+              {/* Bottom sentinel for smooth scrolling */}
+              <div ref={bottomRef} />
             </div>
           ) : (
             <div className="h-full flex items-center justify-center p-8 pb-32">

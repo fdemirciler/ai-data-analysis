@@ -1,126 +1,82 @@
-import { useState, useRef } from "react";
-import { Send, Paperclip, X } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import { Paperclip, ArrowUp } from "lucide-react";
 
 interface ChatInputProps {
-  onSendMessage: (message: string, file?: File) => Promise<void> | void;
+  onSendMessage: (message: string) => void;
   disabled?: boolean;
-  placeholder?: string;
 }
 
-export function ChatInput({ 
-  onSendMessage, 
-  disabled = false, 
-  placeholder = "Ask a question about your data..." 
-}: ChatInputProps) {
+export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
   const [message, setMessage] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!message.trim() && !selectedFile) return;
-
-    await onSendMessage(message.trim(), selectedFile || undefined);
-    setMessage("");
-    setSelectedFile(null);
+  const handleSubmit = () => {
+    if (message.trim() && !disabled) {
+      onSendMessage(message.trim());
+      setMessage("");
+    }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void handleSubmit(e);
+      handleSubmit();
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 20 * 1024 * 1024) {
-        alert("File size must be less than 20MB");
-        return;
-      }
-      setSelectedFile(file);
+  // Auto-resize textarea
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
     }
-  };
-
-  const removeFile = () => {
-    setSelectedFile(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
+  }, [message]);
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/80 backdrop-blur-sm border-t border-border">
-      <div className="max-w-4xl mx-auto p-4 px-8">
-        <form onSubmit={handleSubmit} className="space-y-3">
-          {selectedFile && (
-            <div className="flex items-center gap-2 p-2 bg-muted rounded-lg">
-              <Paperclip className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground flex-1">
-                {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={removeFile}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          )}
+    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 z-30">
+      <div className="max-w-3xl mx-auto px-4">
+        <div className="relative flex items-end gap-2 bg-input-background dark:bg-sidebar-accent rounded-3xl px-4 py-3 border border-border dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground">
+          {/* File Upload Button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-full flex-shrink-0 text-foreground dark:text-sidebar-accent-foreground"
+            disabled={disabled}
+          >
+            <Paperclip className="h-4 w-4 text-foreground dark:text-white" />
+          </Button>
 
-          <div className="relative">
-            <input
-              ref={fileInputRef}
-              type="file"
-              onChange={handleFileSelect}
-              accept=".csv,.xlsx,.xls,.json,.txt"
-              className="hidden"
-            />
-            
-            <div className="absolute left-3 bottom-3 z-10">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={disabled}
-                className="h-6 w-6 p-0 hover:bg-muted/50"
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
-            </div>
+          {/* Textarea */}
+          <Textarea
+            ref={textareaRef}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask anything"
+            disabled={disabled}
+            className="flex-1 min-h-[24px] max-h-[200px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 placeholder:text-muted-foreground"
+            rows={1}
+          />
 
-            <Textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={placeholder}
+          {/* Send Button */}
+          {message.trim() && (
+            <Button
+              onClick={handleSubmit}
               disabled={disabled}
-              className="min-h-[44px] max-h-32 resize-none pl-12 pr-12"
-              rows={1}
-            />
-            
-            <div className="absolute right-3 bottom-3 z-10">
-              <Button
-                type="submit"
-                disabled={disabled || (!message.trim() && !selectedFile)}
-                size="sm"
-                className="h-6 w-6 p-0"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          <p className="text-xs text-muted-foreground text-center">
-            Press Enter to send, Shift+Enter for new line. Supports CSV, Excel, JSON files up to 20MB.
-          </p>
-        </form>
+              size="icon"
+              className="h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 flex-shrink-0"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+        
+        <p className="text-xs text-muted-foreground text-center mt-2">
+          Press Enter to send, Shift+Enter for new line
+        </p>
       </div>
     </div>
   );

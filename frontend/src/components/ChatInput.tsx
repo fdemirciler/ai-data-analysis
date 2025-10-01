@@ -38,7 +38,7 @@ export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 z-30">
       <div className="max-w-3xl mx-auto px-4">
-        <div className="relative flex items-end gap-2 bg-input-background dark:bg-sidebar-accent rounded-3xl px-4 py-3 border border-border dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground">
+      <div className="relative flex items-end gap-2 bg-background rounded-3xl px-4 py-3 border border-border dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground">
           {/* File Upload Button */}
           <Button
             variant="ghost"

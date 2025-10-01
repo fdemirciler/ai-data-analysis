@@ -38,7 +38,7 @@ export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 z-30">
       <div className="max-w-3xl mx-auto px-4">
-      <div className="relative flex items-end gap-2 bg-background rounded-3xl px-4 py-3 border border-border dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground">
+        <div className="group relative flex items-end gap-2 rounded-3xl px-4 py-3 border border-border bg-input-background/90 dark:bg-sidebar-accent/60 dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/40 dark:focus-within:border-sidebar-primary dark:focus-within:ring-sidebar-primary/30 focus-within:shadow-xl">
           {/* File Upload Button */}
           <Button
             variant="ghost"
@@ -57,7 +57,7 @@ export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
             onKeyDown={handleKeyDown}
             placeholder="Ask anything"
             disabled={disabled}
-            className="flex-1 min-h-[24px] max-h-[200px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 placeholder:text-muted-foreground"
+            className="flex-1 min-h-[24px] max-h-[200px] resize-none border-0 bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 p-0 placeholder:text-muted-foreground group-focus-within:text-foreground"
             rows={1}
           />
 

@@ -1,7 +1,7 @@
 import React from "react";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
-import { PanelLeftClose, PanelLeft, SquarePen, MessageSquare, Trash2 } from "lucide-react";
+import { PanelLeftClose, PanelLeft, SquarePen, Trash2, History } from "lucide-react";
 import { cn } from "./ui/utils";
 
 interface Conversation {
@@ -49,7 +49,7 @@ export function ChatSidebar({
         {isOpen ? (
           <>
             {/* Header - Expanded */}
-            <div className="p-3 flex items-center justify-between border-b border-sidebar-border">
+            <div className="h-14 p-3 flex items-center justify-between border-b border-sidebar-border">
               <Button
                 onClick={onNewChat}
                 variant="ghost"
@@ -68,38 +68,43 @@ export function ChatSidebar({
               </Button>
             </div>
 
+            {/* Recent Chats Header */}
+            <div className="px-3 py-2">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-sidebar-foreground">
+                <History className="h-4 w-4" />
+                <span>Recent Chats</span>
+              </h2>
+            </div>
+
             {/* Chat History */}
-            <ScrollArea className="flex-1 px-2 py-2">
+            <ScrollArea className="flex-1 px-2">
               <div className="space-y-1">
                 {conversations.map((conversation) => (
                   <div
                     key={conversation.id}
                     className={cn(
-                      "group w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
+                      "group w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors text-left",
                       activeConversationId === conversation.id
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
                     )}
                   >
                     <button
                       onClick={() => onSelectConversation(conversation.id)}
-                      className="flex items-center gap-3 flex-1 text-left"
+                      className="truncate flex-1 text-sm text-left"
                     >
-                      <MessageSquare className="h-4 w-4 flex-shrink-0" />
-                      <span className="truncate flex-1 text-sm">
-                        {conversation.title}
-                      </span>
+                      {conversation.title}
                     </button>
                     <Button
                       variant="ghost"
                       size="icon"
                       aria-label="Delete conversation"
                       className={cn(
-                        "h-8 w-8 shrink-0",
+                        "h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
                         activeConversationId === conversation.id
                           ? "text-sidebar-accent-foreground"
                           : "text-sidebar-foreground"
-                      ) + " opacity-0 group-hover:opacity-100 transition-opacity"}
+                      )}
                       onClick={() => onDeleteConversation(conversation.id)}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -151,7 +156,17 @@ export function ChatSidebar({
               </Button>
             </div>
 
-            {/* Empty space when collapsed - no chat history icons */}
+            {/* Recent Chats Icon - Collapsed */}
+            <div className="p-2 flex flex-col items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Recent Chats"
+              >
+                <History className="h-5 w-5" />
+              </Button>
+            </div>
+
             <div className="flex-1" />
 
             {/* User Profile - Collapsed */}

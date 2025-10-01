@@ -292,7 +292,7 @@ def process_bytes_to_artifacts(
         body = work.slice(hdr_row + 1)
         rename_map = {old: headers[i] for i, old in enumerate(body.columns[: len(headers)])}
         body = body.rename(rename_map)
-        eq_exprs = [(pl.col(h).cast(pl.Utf8).str.strip() == headers[i]) for i, h in enumerate(headers)]
+        eq_exprs = [(pl.col(h).cast(pl.Utf8).str.strip_chars() == headers[i]) for i, h in enumerate(headers)]
         is_hdr_row = pl.all_horizontal(eq_exprs)
         body = body.filter(~is_hdr_row)
         body, numeric_cols = _apply_numeric_normalization(body)

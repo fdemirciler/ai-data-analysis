@@ -105,21 +105,45 @@ try {
 $CHAT_URL = (gcloud functions describe chat --gen2 --region=$REGION --format "value(url)" | Out-String).Trim()
 Write-Host "CHAT_URL: $CHAT_URL"
 if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
-  $body = @{ uid = $UID; sessionId = $SID; datasetId = $resp.datasetId; question = "Top categories" } | ConvertTo-Json -Compress
+  # Use a metadata-only question for a fast "done" event
+  $body = @{ uid = $UID; sessionId = $SID; datasetId = $resp.datasetId; question = "How many rows?" } | ConvertTo-Json -Compress
   $payloadPath = Join-Path $env:TEMP "chat_payload.json"
+  $sseOut = Join-Path $env:TEMP ("chat_sse_{0}.log" -f ([Guid]::NewGuid().ToString('N')))
   $body | Out-File -FilePath $payloadPath -Encoding utf8 -NoNewline
   try {
-    & curl.exe -N `
+    & curl.exe -sN `
       -H "Origin: http://localhost:3000" `
       -H "Content-Type: application/json" `
       -H "X-User-Id: $UID" `
       -H "X-Session-Id: $SID" `
       --data-binary "@$payloadPath" `
-      --max-time 25 `
-      $CHAT_URL
+      --max-time 60 `
+      $CHAT_URL 2>&1 | Tee-Object -FilePath $sseOut | Out-Null
+
+    # Try to parse the final done event and verify results in GCS
+    try {
+      $doneMatch = Select-String -Path $sseOut -Pattern 'data:\s*\{.*"type"\s*:\s*"done"' | Select-Object -Last 1
+      if ($doneMatch) {
+        $jsonLine = ($doneMatch.Line -replace '^data:\s*','')
+        $evt = $jsonLine | ConvertFrom-Json
+        $msgId = $evt.data.messageId
+        if ($msgId) {
+          $resultsPrefix = "users/$UID/sessions/$SID/results/$msgId"
+          Write-Host "Verifying analysis artifacts at gs://$BUCKET/$resultsPrefix/"
+          gcloud storage ls "gs://$BUCKET/$resultsPrefix/**"
+        } else {
+          Write-Host "SSE parse warning: messageId missing in done event"
+        }
+      } else {
+        Write-Host "SSE parse warning: no done event found"
+      }
+    } catch {
+      Write-Host "SSE parse warning:" $_.Exception.Message
+    }
   } catch {
   } finally {
     if (Test-Path $payloadPath) { Remove-Item $payloadPath -Force }
+    if (Test-Path $sseOut) { Remove-Item $sseOut -Force }
   }
 } else {
   Write-Host "SSE test skipped: CHAT_URL invalid"
@@ -129,7 +153,7 @@ if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
 # Optional: XLSX smoke test
 # =============================
 try {
-  $XLSX_FILE = (Join-Path $ROOT_DIR "test_files\basic.xlsx")
+  $XLSX_FILE = (Join-Path $ROOT_DIR "test_files\test.xlsx")
   if (-not (Test-Path $XLSX_FILE)) {
     $maybe = Get-ChildItem -Path (Join-Path $ROOT_DIR "test_files") -Filter *.xlsx -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($maybe) { $XLSX_FILE = $maybe.FullName } else { $XLSX_FILE = $null }

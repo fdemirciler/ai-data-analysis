@@ -132,22 +132,27 @@ flowchart TD
 - **2025-10-01**
   - Backend Performance – Step 2 implemented.
     - Preprocess engine defaulted to Polars for CSV via `run-preprocess/pipeline_adapter_polars.py`; Excel remains via pandas.
-    - Engine selection via `PREPROCESS_ENGINE=polars|pandas` (default: polars) in `run-preprocess/main.py` with safe fallback.
     - Extracted `process_df_to_artifacts()` in `run-preprocess/pipeline_adapter.py` to centralize cleaning/payload logic (shared by both adapters).
     - Dependencies: added `polars[xlsx]==1.7.1`, aligned `numpy==2.0.2` in `run-preprocess/requirements.txt`.
     - Deployed new `preprocess-svc` revision with `--cpu=2 --memory=2Gi --concurrency=10` and `PREPROCESS_ENGINE=polars`.
     - Next: run `backend/test.ps1` to smoke test end-to-end (upload → Eventarc → artifacts + Firestore).
 
+- **2025-10-01**
+  - Polars adapter bugfix and redeploy.
+    - Replaced Polars `.str.strip()` with `.str.strip_chars()` in `run-preprocess/pipeline_adapter_polars.py` (`_drop_fully_blank_rows_pl`, `_numeric_expr_for`, repeat-header filters) to match deployed Polars API.
+    - Redeployed `preprocess-svc`; Eventarc successfully processed uploaded CSV; artifacts written: `cleaned/cleaned.parquet`, `metadata/payload.json`, `reports/cleaning_report.json`.
+    - `backend/test.ps1` passed end-to-end; prior `MISSING_PARQUET` error resolved.
+    - Runtime confirmed at Python 3.12 via `run-preprocess/runtime.txt`.
+
 - **2025-09-29**
   - **Frontend Redesign**: Complete UI overhaul with ChatGPT-style interface.
-    - Created 4 new components: `NewSidebar.tsx` (collapsible with icon/expanded states), `FloatingChatInput.tsx` (overlay at bottom), `NewChatArea.tsx` (infinite scroll), `FloatingControls.tsx` (minimal top bar).
-    - Removed visible header/footer for immersive experience; floating controls with backdrop blur.
+  - Created 4 new components: `NewSidebar.tsx` (collapsible with icon/expanded states), `FloatingChatInput.tsx` (overlay at bottom), `NewChatArea.tsx` (infinite scroll), `FloatingControls.tsx` (minimal top bar).
+  - Removed visible header/footer for immersive experience; floating controls with backdrop blur.
     - Sidebar displays last 5 chat sessions, user profile with avatar, and daily usage indicator (100 requests/day limit).
     - Chat input: auto-resizing textarea, file attachment preview, keyboard shortcuts (Enter to send, Shift+Enter for new line).
     - Fully integrated with existing `ChatContext` and `AuthContext`; uses real SSE streaming from `services/api.ts`.
     - Firebase config template created at `frontend/src/lib/firebase.ts` with placeholders for future migration.
     - Updated `main.tsx` to use new `AppFinal.tsx` as entry point.
-    - Documentation: Created `FRONTEND_REDESIGN.md` with comprehensive design system, component specs, and migration guide.
 - **2025-09-28**
   - Milestone 2: Implemented LLM-driven analysis with Gemini 2.5 Flash.
     - Orchestrator (`backend/functions/orchestrator/`) now downloads `cleaned.parquet`, generates Python via LLM, validates with AST (allowlist: pandas, numpy, math, json), and executes in a sandboxed subprocess with a 60s hard timeout.

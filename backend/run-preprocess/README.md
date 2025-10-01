@@ -44,6 +44,7 @@ If you prefer a unified flow for all backend components, use `./backend/deploy.p
 - No column renames; instead flag potential dimensions in the payload.
 - Deterministic sample of 50 rows for payload; truncate long strings.
 - Parquet written with `pyarrow` and compression.
+- Polars string API: we use `str.strip_chars()` (not `str.strip()`) for whitespace trimming in expressions to match the deployed Polars version. If you upgrade Polars, re-verify string namespace compatibility in `pipeline_adapter_polars.py`.
 
 ### Engine selection
 

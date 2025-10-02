@@ -14,7 +14,7 @@ interface ChatMessageProps {
   userName: string;
 }
 
-export function ChatMessage({ message, userName }: ChatMessageProps) {
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) => {
   const isUser = message.role === "user";
 
   return (
@@ -42,4 +42,4 @@ export function ChatMessage({ message, userName }: ChatMessageProps) {
       </div>
     </div>
   );
-}
+};

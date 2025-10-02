@@ -31,6 +31,34 @@ gcloud services enable `
 $PROJECT_NUMBER = gcloud projects describe $PROJECT_ID --format="value(projectNumber)"
 $SERVICE_ACCOUNT = "$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 
+# ==============================
+# Compose ALLOWED_ORIGINS string
+# ==============================
+$ALLOWED_ORIGINS = "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com"
+
+# Build YAML env files for Gen2
+$SIGN_ENV_FILE = Join-Path $SCRIPT_DIR "env.sign-upload-url.yaml"
+$CHAT_ENV_FILE = Join-Path $SCRIPT_DIR "env.chat.yaml"
+
+# Sign-upload-url env (YAML)
+@"
+FILES_BUCKET: "$BUCKET"
+GCP_PROJECT: "$PROJECT_ID"
+TTL_DAYS: "1"
+RUNTIME_SERVICE_ACCOUNT: "$SERVICE_ACCOUNT"
+ALLOWED_ORIGINS: "$ALLOWED_ORIGINS"
+"@ | Out-File -Encoding ascii -FilePath $SIGN_ENV_FILE
+
+# Chat env (YAML)
+@"
+FILES_BUCKET: "$BUCKET"
+GCP_PROJECT: "$PROJECT_ID"
+ORCH_IPC_MODE: "base64"
+GEMINI_FUSED: "1"
+RUNTIME_SERVICE_ACCOUNT: "$SERVICE_ACCOUNT"
+ALLOWED_ORIGINS: "$ALLOWED_ORIGINS"
+"@ | Out-File -Encoding ascii -FilePath $CHAT_ENV_FILE
+
 # ======================================
 # Secret Manager access for chat (Gemini)
 # ======================================
@@ -51,7 +79,7 @@ gcloud functions deploy sign-upload-url `
   --trigger-http `
   --allow-unauthenticated `
   --service-account="$SERVICE_ACCOUNT" `
-  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,TTL_DAYS=1,RUNTIME_SERVICE_ACCOUNT=$SERVICE_ACCOUNT"
+  --env-vars-file="$SIGN_ENV_FILE"
 
 # ======================================
 # Deploy Functions Gen2: chat (SSE HTTP)
@@ -66,7 +94,7 @@ gcloud functions deploy chat `
   --allow-unauthenticated `
   --service-account="$SERVICE_ACCOUNT" `
   --memory=512Mi `
-  --set-env-vars="FILES_BUCKET=$BUCKET,GCP_PROJECT=$PROJECT_ID,ORCH_IPC_MODE=base64,GEMINI_FUSED=1" `
+  --env-vars-file="$CHAT_ENV_FILE" `
   --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
 # ====================

@@ -4,15 +4,19 @@ import { ChatMessage, type Message } from "./components/ChatMessage";
 import { ChatInput } from "./components/ChatInput";
 import { ChatHeader } from "./components/ChatHeader";
 import { ScrollArea } from "./components/ui/scroll-area";
+import { useAuth } from "./context/AuthContext";
+import { getSignedUploadUrl, putToSignedUrl, streamChat, type ChatEvent } from "./services/api";
 
 interface Conversation {
   id: string;
   title: string;
   timestamp: Date;
   messages: Message[];
+  datasetId?: string;
 }
 
 export default function App() {
+  const { idToken, loading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dailyUsed, setDailyUsed] = useState(3);
   const dailyLimit = 50;
@@ -58,6 +62,8 @@ export default function App() {
   ]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>("1");
   const [isTyping, setIsTyping] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevConvIdRef = useRef<string | null>(null);
@@ -107,77 +113,143 @@ export default function App() {
     });
   };
 
-  const simulateAIResponse = (userMessage: string): string => {
-    const responses = [
-      "That's an interesting question! Let me help you with that.",
-      "I understand what you're asking. Here's what I think...",
-      "Great question! Based on what you've told me, I'd suggest...",
-      "Let me break this down for you in a simple way.",
-      "I'm here to help! Here's my take on this...",
-    ];
-    
-    const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-    return `${randomResponse}\n\n${userMessage.toLowerCase().includes("how") ? "Here are some steps you can follow to achieve this. The key is to start small and build up your understanding gradually." : "This is a common topic, and there are several approaches you could take depending on your specific needs and context."}`;
+  const SIGN_URL = (import.meta as any).env?.VITE_SIGN_URL as string | undefined;
+  const CHAT_URL = (import.meta as any).env?.VITE_CHAT_URL as string | undefined;
+
+  const ensureConversation = (): string => {
+    if (!activeConversationId) {
+      const newId = Date.now().toString();
+      const newConversation: Conversation = {
+        id: newId,
+        title: "New conversation",
+        timestamp: new Date(),
+        messages: [],
+      };
+      setConversations((prev) => [newConversation, ...prev]);
+      setActiveConversationId(newId);
+      return newId;
+    }
+    return activeConversationId;
+  };
+
+  const handleUploadFile = async (file: File) => {
+    if (!SIGN_URL) {
+      alert("Missing VITE_SIGN_URL env");
+      return;
+    }
+    if (loading || !idToken) {
+      alert("Authenticating... please retry");
+      return;
+    }
+    setUploading(true);
+    try {
+      const convId = ensureConversation();
+      if (!convId) return;
+      const resp = await getSignedUploadUrl({
+        signUrl: SIGN_URL,
+        idToken,
+        sessionId: convId,
+        filename: file.name,
+        size: file.size,
+        type: file.type || "application/octet-stream",
+      });
+      await putToSignedUrl(resp.url, file);
+
+      // Update conversation with datasetId and add system message
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId
+            ? {
+                ...c,
+                datasetId: resp.datasetId,
+                messages: [
+                  ...c.messages,
+                  {
+                    id: `${convId}-${Date.now()}-sys`,
+                    role: "assistant",
+                    content: "File uploaded and queued for preprocessing. You can now ask a question about your data.",
+                    timestamp: new Date(),
+                  } as Message,
+                ],
+              }
+            : c
+        )
+      );
+    } catch (e: any) {
+      alert(e?.message || String(e));
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleSendMessage = async (content: string) => {
-    if (!activeConversationId) {
-      handleNewChat();
-      // Wait for state to update
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    const convId = ensureConversation();
+    if (!convId) return;
+    const conv = conversations.find((c) => c.id === convId);
+    if (!conv?.datasetId) {
+      alert("Please upload a dataset first using the paperclip.");
+      return;
+    }
+    if (loading || !idToken) {
+      alert("Authenticating... please retry");
+      return;
+    }
+    if (!CHAT_URL) {
+      alert("Missing VITE_CHAT_URL env");
+      return;
     }
 
-    const currentConvId = activeConversationId || conversations[0]?.id;
-    if (!currentConvId) return;
-
-    // Add user message
+    // Push user message
     const userMessage: Message = {
-      id: `${currentConvId}-${Date.now()}`,
+      id: `${convId}-${Date.now()}`,
       role: "user",
       content,
       timestamp: new Date(),
     };
-
     setConversations((prev) =>
-      prev.map((conv) => {
-        if (conv.id === currentConvId) {
-          const updatedConv = {
-            ...conv,
-            messages: [...conv.messages, userMessage],
-          };
-          // Update title if this is the first message
-          if (conv.messages.length === 0) {
-            updatedConv.title = content.slice(0, 50) + (content.length > 50 ? "..." : "");
-          }
-          return updatedConv;
-        }
-        return conv;
-      })
-    );
-
-    // Simulate AI typing
-    setIsTyping(true);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Add AI response
-    const aiMessage: Message = {
-      id: `${currentConvId}-${Date.now()}-ai`,
-      role: "assistant",
-      content: simulateAIResponse(content),
-      timestamp: new Date(),
-    };
-
-    setConversations((prev) =>
-      prev.map((conv) =>
-        conv.id === currentConvId
-          ? { ...conv, messages: [...conv.messages, aiMessage] }
-          : conv
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              messages: [...c.messages, userMessage],
+              title: c.messages.length === 0 ? (content.length > 50 ? content.slice(0, 50) + "..." : content) : c.title,
+            }
+          : c
       )
     );
-    setIsTyping(false);
-    
-    // Increment daily usage counter
-    setDailyUsed((prev) => prev + 1);
+
+    // Start SSE stream
+    setIsTyping(true);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      await streamChat({
+        chatUrl: CHAT_URL,
+        idToken,
+        sessionId: convId,
+        datasetId: conv.datasetId!,
+        question: content,
+        signal: ac.signal,
+        onEvent: (ev: ChatEvent) => {
+          if (ev.type === "error") {
+            setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, messages: [...c.messages, { id: `${convId}-${Date.now()}-err`, role: "assistant", content: `Error: ${ev.data.message}`, timestamp: new Date() }] } : c)));
+            setIsTyping(false);
+          } else if (ev.type === "done") {
+            const text = ev.data.summary || "Analysis complete.";
+            setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, messages: [...c.messages, { id: `${convId}-${Date.now()}-ai`, role: "assistant", content: text, timestamp: new Date() }] } : c)));
+            setIsTyping(false);
+            setDailyUsed((prev) => prev + 1);
+          }
+        },
+      });
+    } catch (e) {
+      // Network error already surfaced in onEvent or thrown; ensure state cleanup
+      setIsTyping(false);
+    } finally {
+      abortRef.current = null;
+      // Fallback: if stream ended without a 'done' event, stop typing indicator
+      setIsTyping(false);
+    }
   };
 
   return (
@@ -212,11 +284,12 @@ export default function App() {
           {activeConversation && activeConversation.messages.length > 0 ? (
             <div className="pb-32">
               {activeConversation.messages.map((message) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  userName="Fatih Demirciler"
-                />
+                <React.Fragment key={message.id}>
+                  <ChatMessage
+                    message={message}
+                    userName="Fatih Demirciler"
+                  />
+                </React.Fragment>
               ))}
               {isTyping && (
                 <div className="w-full py-8 px-4">
@@ -257,7 +330,7 @@ export default function App() {
           marginLeft: sidebarOpen ? "256px" : "64px",
         }}
       >
-        <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} />
+        <ChatInput onSendMessage={handleSendMessage} onUploadFile={handleUploadFile} disabled={isTyping || uploading} />
       </div>
     </div>
   );

@@ -44,6 +44,8 @@ venv/
 !.env.example
 !.env.sample
 !.env.local.example
+/frontend/.env
+/frontend/.env.local
 
 # Python tooling caches
 .mypy_cache/

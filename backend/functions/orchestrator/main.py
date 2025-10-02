@@ -4,7 +4,7 @@ import time
 import uuid
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Generator, Iterable
 
 import functions_framework
@@ -17,6 +17,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pyarrow as pa  # type: ignore
 import pyarrow.parquet as pq  # type: ignore
 
+import firebase_admin
+from firebase_admin import auth as fb_auth
+import google.auth
+from google.auth import impersonated_credentials
+import google.auth.transport.requests
+
 import gemini_client
 import sandbox_runner
 
@@ -28,6 +34,93 @@ FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
 PING_INTERVAL_SECONDS = int(os.getenv("SSE_PING_INTERVAL_SECONDS", "22"))
 HARD_TIMEOUT_SECONDS = int(os.getenv("CHAT_HARD_TIMEOUT_SECONDS", "60"))
 ORCH_IPC_MODE = os.getenv("ORCH_IPC_MODE", "base64").lower()
+RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
+
+# Allowed origins (comma-separated). Default supports local dev and Firebase Hosting.
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in (os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com",
+    ) or "").split(",")
+    if o.strip()
+}
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return False
+    return origin in ALLOWED_ORIGINS
+
+
+# Cache for signing credentials used for V4 signing
+_CACHED_SIGNING_CREDS = None
+_CACHED_EXPIRES_AT = 0.0
+
+
+def _impersonated_signing_credentials(sa_email: str | None):
+    """Create impersonated credentials for signing using IAM Credentials API.
+
+    Requires that the runtime service account has roles/iam.serviceAccountTokenCreator
+    on the target principal (can be itself). Also requires the
+    iamcredentials.googleapis.com API to be enabled.
+    """
+    global _CACHED_SIGNING_CREDS, _CACHED_EXPIRES_AT
+
+    now = time.time()
+    if _CACHED_SIGNING_CREDS is not None and now < _CACHED_EXPIRES_AT:
+        return _CACHED_SIGNING_CREDS
+
+    if not sa_email:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        _CACHED_SIGNING_CREDS = creds
+        _CACHED_EXPIRES_AT = now + 3300  # ~55m
+        return _CACHED_SIGNING_CREDS
+
+    source_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    if getattr(source_creds, "token", None) is None:
+        source_creds.refresh(google.auth.transport.requests.Request())
+
+    _CACHED_SIGNING_CREDS = impersonated_credentials.Credentials(
+        source_credentials=source_creds,
+        target_principal=sa_email,
+        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        lifetime=3600,
+    )
+    _CACHED_EXPIRES_AT = now + 3300
+    return _CACHED_SIGNING_CREDS
+
+
+def _sign_gs_uri(gs_uri: str, minutes: int = 15) -> str:
+    """Return a signed HTTPS URL for the given gs:// URI. If not gs://, return as-is."""
+    if not gs_uri or not gs_uri.startswith("gs://"):
+        return gs_uri
+    no_scheme = gs_uri[5:]
+    parts = no_scheme.split("/", 1)
+    if len(parts) != 2:
+        return gs_uri
+    bucket_name, blob_path = parts[0], parts[1]
+    storage_client = storage.Client(project=PROJECT_ID)
+    blob = storage_client.bucket(bucket_name).blob(blob_path)
+    signing_creds = _impersonated_signing_credentials(RUNTIME_SERVICE_ACCOUNT)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=minutes),
+        method="GET",
+        credentials=signing_creds,
+    )
+
+
+def _sign_uris(uris: dict | None) -> dict:
+    d = uris or {}
+    return {k: _sign_gs_uri(v) for k, v in d.items()}
+
+
+# Initialize Firebase Admin SDK
+try:
+    firebase_admin.get_app()
+except ValueError:
+    firebase_admin.initialize_app()
 
 
 def _sse_format(obj: dict) -> str:
@@ -101,7 +194,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         # Persist and done (no parquet or worker)
         yield _sse_format({"type": "persisting"})
         results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
-        uris = {
+        uris_gs = {
             "table": f"gs://{FILES_BUCKET}/{results_prefix}/table.json",
             "metrics": f"gs://{FILES_BUCKET}/{results_prefix}/metrics.json",
             "chartData": f"gs://{FILES_BUCKET}/{results_prefix}/chart_data.json",
@@ -124,6 +217,9 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)[:400]}})
             return
 
+        # Sign artifact URIs for browser access
+        uris = _sign_uris(uris_gs)
+
         fs = firestore.Client(project=PROJECT_ID)
         fs.collection("users").document(uid).collection("sessions").document(session_id).collection("messages").document(message_id).set({
             "role": "assistant",
@@ -136,7 +232,14 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
         yield _sse_format({
             "type": "done",
-            "data": {"messageId": message_id, "chartData": chart_data, "tableSample": table[: min(len(table), 50)], "uris": uris},
+            "data": {
+                "messageId": message_id,
+                "chartData": chart_data,
+                "tableSample": table[: min(len(table), 50)],
+                "uris": uris,
+                "urisGs": uris_gs,
+                "summary": "Dataset metadata provided.",
+            },
         })
         return
 
@@ -225,7 +328,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     # persist
     yield _sse_format({"type": "persisting"})
     results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
-    uris = {
+    uris_gs = {
         "table": f"gs://{FILES_BUCKET}/{results_prefix}/table.json",
         "metrics": f"gs://{FILES_BUCKET}/{results_prefix}/metrics.json",
         "chartData": f"gs://{FILES_BUCKET}/{results_prefix}/chart_data.json",
@@ -275,6 +378,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             "chartData": chart_data,
             "tableSample": table_sample,
             "uris": uris,
+            "urisGs": uris_gs,
+            "summary": summary,
         },
     })
     # Close stream after final event (Option B)
@@ -283,26 +388,42 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
 @functions_framework.http
 def chat(request: Request) -> Response:
+    origin = request.headers.get("Origin") or ""
     if request.method == "OPTIONS":
+        if not _origin_allowed(origin):
+            return ("Origin not allowed", 403, {"Content-Type": "text/plain"})
         headers = {
-            "Access-Control-Allow-Origin": request.headers.get("Origin") or "http://localhost:3000",
+            "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-User-Id, X-Session-Id",
+            # Include lowercase variants to match Access-Control-Request-Headers from browsers
+            "Access-Control-Allow-Headers": "Content-Type, content-type, Authorization, authorization, X-Session-Id, x-session-id",
             "Access-Control-Max-Age": "3600",
             "Cache-Control": "no-store",
         }
         return ("", 204, headers)
 
     try:
+        if not _origin_allowed(origin):
+            return (json.dumps({"error": "origin not allowed"}), 403, {"Content-Type": "application/json"})
+
+        # Verify Firebase ID token
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.split(" ", 1)[1] if auth_header.lower().startswith("bearer ") else None
+        if not token:
+            return (json.dumps({"error": "missing Authorization Bearer token"}), 401, {"Content-Type": "application/json"})
+        try:
+            decoded = fb_auth.verify_id_token(token)
+            uid = decoded.get("uid")
+        except Exception as e:  # noqa: BLE001
+            return (json.dumps({"error": "invalid token", "detail": str(e)[:200]}), 401, {"Content-Type": "application/json"})
+
         payload = request.get_json(silent=True) or {}
         session_id = payload.get("sessionId") or request.headers.get("X-Session-Id")
         dataset_id = payload.get("datasetId")
-        uid = request.headers.get("X-User-Id") or payload.get("uid")
         question = payload.get("question") or ""
         if not all([session_id, dataset_id, uid]):
-            return (json.dumps({"error": "missing sessionId, datasetId, or uid"}), 400, {"Content-Type": "application/json"})
+            return (json.dumps({"error": "missing sessionId or datasetId"}), 400, {"Content-Type": "application/json"})
 
-        origin = request.headers.get("Origin") or "http://localhost:3000"
         headers = {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache, no-store, must-revalidate",

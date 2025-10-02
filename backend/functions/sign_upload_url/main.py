@@ -10,6 +10,8 @@ from google.cloud import firestore
 import google.auth
 from google.auth import impersonated_credentials
 import google.auth.transport.requests
+import firebase_admin
+from firebase_admin import auth as fb_auth
 
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
@@ -17,6 +19,16 @@ PROJECT_ID = os.getenv("GCP_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT", "ai-data
 TTL_DAYS = int(os.getenv("TTL_DAYS", "1"))
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
 SIGNING_CREDS_TTL_SECONDS = int(os.getenv("SIGNING_CREDS_TTL_SECONDS", "3300"))  # ~55m
+
+# Allowed origins (comma-separated). Default supports local dev and Firebase Hosting.
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in (os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com",
+    ) or "").split(",")
+    if o.strip()
+}
 
 ALLOWED_MIME = {
     "text/csv": ".csv",
@@ -33,12 +45,17 @@ def _ext_from_filename_or_type(filename: str, mime: str) -> str:
     return ALLOWED_MIME.get(mime, "")
 
 
-def _require_headers(request) -> Tuple[str, str]:
-    uid = request.headers.get("X-User-Id")
-    sid = request.headers.get("X-Session-Id")
-    if not uid or not sid:
-        raise ValueError("Missing X-User-Id or X-Session-Id header")
-    return uid, sid
+def _origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return False
+    return origin in ALLOWED_ORIGINS
+
+
+def _require_session_id(request) -> str:
+    sid = request.headers.get("X-Session-Id") or request.args.get("sessionId")
+    if not sid:
+        raise ValueError("Missing X-Session-Id header")
+    return sid
 
 
 _CACHED_SIGNING_CREDS = None
@@ -80,6 +97,12 @@ def _impersonated_signing_credentials(sa_email: str):
     return _CACHED_SIGNING_CREDS
 
 
+try:
+    firebase_admin.get_app()
+except ValueError:
+    firebase_admin.initialize_app()
+
+
 def sign_upload_url(request):
     """HTTP Cloud Function entrypoint.
 
@@ -91,18 +114,37 @@ def sign_upload_url(request):
     - X-User-Id
     - X-Session-Id
     """
+    origin = request.headers.get("Origin") or ""
     if request.method == "OPTIONS":
         # CORS preflight
+        if not _origin_allowed(origin):
+            return ("Origin not allowed", 403, {"Content-Type": "text/plain"})
         headers = {
-            "Access-Control-Allow-Origin": request.headers.get("Origin", "*"),
-            "Access-Control-Allow-Methods": "PUT, GET, HEAD, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, x-goog-meta-*",
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            # Include lowercase variants to match Access-Control-Request-Headers
+            "Access-Control-Allow-Headers": "Content-Type, content-type, Authorization, authorization, X-Session-Id, x-session-id",
             "Access-Control-Max-Age": "3600",
         }
         return ("", 204, headers)
 
     try:
-        uid, sid = _require_headers(request)
+        # Origin allowlist
+        if not _origin_allowed(origin):
+            return (json.dumps({"error": "origin not allowed"}), 403, {"Content-Type": "application/json"})
+
+        # Verify Firebase ID token
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.split(" ", 1)[1] if auth_header.lower().startswith("bearer ") else None
+        if not token:
+            return (json.dumps({"error": "missing Authorization Bearer token"}), 401, {"Content-Type": "application/json"})
+        try:
+            decoded = fb_auth.verify_id_token(token)
+            uid = decoded.get("uid")
+        except Exception as e:  # noqa: BLE001
+            return (json.dumps({"error": "invalid token", "detail": str(e)[:200]}), 401, {"Content-Type": "application/json"})
+
+        sid = _require_session_id(request)
         filename = request.args.get("filename", "")
         size = int(request.args.get("size", "0"))
         mime = request.args.get("type", "")
@@ -155,7 +197,7 @@ def sign_upload_url(request):
         }
         headers = {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": request.headers.get("Origin", "*"),
+            "Access-Control-Allow-Origin": origin,
         }
         return (json.dumps(resp), 200, headers)
 

@@ -86,6 +86,34 @@ def _prepare_globals():
     return globs
 
 
+def _build_fallback_from_df(df: pd.DataFrame, ctx: dict) -> dict:
+    """Create a minimal RESULT dict from a DataFrame sample."""
+    try:
+        row_limit = int((ctx or {}).get("row_limit", 200))
+    except Exception:
+        row_limit = 200
+    table = df.head(row_limit).to_dict(orient="records")
+    metrics = {"rows": int(len(df)), "columns": int(len(df.columns))}
+    chart = {"kind": "bar", "labels": [], "series": [{"label": "Count", "data": []}]}
+    # Prefer a categorical distribution; else a numeric preview
+    try:
+        obj_cols = [c for c in df.columns if df[c].dtype == "object"]
+        if obj_cols:
+            vc = df[obj_cols[0]].astype("string").value_counts().head(5)
+            chart["labels"] = [str(x) for x in vc.index.tolist()]
+            chart["series"][0]["data"] = [int(x) for x in vc.values.tolist()]
+        else:
+            num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+            if num_cols:
+                s = df[num_cols[0]].dropna().head(5)
+                chart["labels"] = [str(i) for i in range(len(s))]
+                chart["series"][0]["data"] = [float(x) for x in s.tolist()]
+    except Exception:
+        # Keep minimal chart on failure
+        pass
+    return {"table": table, "metrics": metrics, "chartData": chart}
+
+
 def main() -> int:
     global _orig_import  # noqa: PLW0603
     import builtins as _builtins
@@ -132,11 +160,27 @@ def main() -> int:
         result = run(df, ctx)
         if result is None:
             result = globs.get("RESULT")
+
+        # Coerce common outputs into the expected dict shape
         if not isinstance(result, dict):
-            raise RuntimeError("run() must return a dict")
-        # Basic shape checks
-        if "table" not in result or "chartData" not in result:
-            raise RuntimeError("RESULT must include 'table' and 'chartData'")
+            if isinstance(result, pd.DataFrame):
+                result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}}
+            elif isinstance(result, list):
+                # Assume list of rows
+                result = {"table": result, "metrics": {}, "chartData": {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}}
+            else:
+                # Fallback to df preview
+                result = _build_fallback_from_df(df, ctx)
+
+        # Ensure required keys exist; fill from df when missing
+        if "table" not in result or not isinstance(result.get("table"), list):
+            result["table"] = df.head(int((ctx or {}).get("row_limit", 200))).to_dict(orient="records")
+        if "metrics" not in result or not isinstance(result.get("metrics"), dict):
+            result["metrics"] = {"rows": int(len(df)), "columns": int(len(df.columns))}
+        if "chartData" not in result or not isinstance(result.get("chartData"), dict):
+            # Minimal chart
+            result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"]
+
         sys.stdout.write(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as e:  # noqa: BLE001

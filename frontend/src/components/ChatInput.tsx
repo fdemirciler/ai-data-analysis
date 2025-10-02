@@ -5,12 +5,14 @@ import { Paperclip, ArrowUp } from "lucide-react";
 
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
+  onUploadFile?: (file: File) => void | Promise<void>;
   disabled?: boolean;
 }
 
-export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
+export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = () => {
     if (message.trim() && !disabled) {
@@ -47,9 +49,34 @@ export function ChatInput({ onSendMessage, disabled }: ChatInputProps) {
             size="icon"
             className="h-8 w-8 rounded-full flex-shrink-0 text-foreground dark:text-sidebar-accent-foreground"
             disabled={disabled}
+            onClick={() => fileInputRef.current?.click()}
           >
             <Paperclip className="h-4 w-4 text-foreground dark:text-white" />
           </Button>
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={async (e) => {
+              const inputEl = e.currentTarget as HTMLInputElement;
+              const f = inputEl.files?.[0];
+              if (f && onUploadFile && !disabled) {
+                try {
+                  await onUploadFile(f);
+                } finally {
+                  // Reset input so selecting same file again still fires change
+                  if (fileInputRef.current) {
+                    fileInputRef.current.value = "";
+                  } else {
+                    inputEl.value = "";
+                  }
+                }
+              }
+            }}
+          />
 
           {/* Textarea */}
           <Textarea

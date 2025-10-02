@@ -1,6 +1,6 @@
 # AI Data Analyst
 
-AI Data Analyst is a serverless, event-driven pipeline that lets users upload data files directly to Google Cloud Storage and automatically preprocesses them into clean, analysis-ready artifacts. The system persists metadata and results to Firestore and GCS and is designed for reliability, security, and low operational overhead.
+AI Data Analyst is a serverless, event-driven pipeline that lets users upload data files directly to Google Cloud Storage and automatically preprocesses them into clean, analysis-ready artifacts. It also provides a chat interface that generates and executes Python analysis against the preprocessed data and streams results to the client.
 
 ## What this project does
 - Issues secure, short-lived signed URLs for direct uploads from the client to GCS.
@@ -9,8 +9,9 @@ AI Data Analyst is a serverless, event-driven pipeline that lets users upload da
 - Stores dataset metadata and status in Firestore for downstream consumption.
 
 ## Key components
-- `functions/sign_upload_url/` – Cloud Function (Gen2) that validates upload requests and returns a V4 signed URL (PUT).
-- `run-preprocess/` – Cloud Run service that receives Eventarc events and runs the preprocessing pipeline.
+- `backend/functions/sign_upload_url/` – Cloud Function (Gen2) that validates upload requests (Firebase ID token) and returns a V4 signed URL (PUT).
+- `backend/functions/orchestrator/` – Cloud Function (Gen2) that orchestrates analysis and streams SSE events while generating code, executing it in a sandbox, and persisting artifacts.
+- `backend/run-preprocess/` – Cloud Run service that receives Eventarc events and runs the preprocessing pipeline.
 - Eventarc trigger – Routes GCS finalize events (on `ai-data-analyser-files`) to the Cloud Run `/eventarc` endpoint.
 - Firestore – Stores dataset documents (status, URIs, summary) with TTL-based cleanup.
 - GCS bucket `ai-data-analyser-files` – Stores raw uploads and generated artifacts.
@@ -25,6 +26,10 @@ flowchart TD
   D -->|HTTP CloudEvent| E[Cloud Run: preprocess-svc /eventarc]
   E -->|Artifacts| C
   E -->|Status update| F[Firestore]
+  A -->|SSE chat| G[Cloud Function: chat]
+  G -->|LLM code + sandbox run| C
+  G -->|Persist results| C
+  G -->|Stream 'done'| A
 ```
 
 ## Design choices
@@ -38,35 +43,42 @@ flowchart TD
 - `backend/` – All deployable backend components
   - `functions/` – Serverless functions (Gen2)
     - `sign_upload_url/` – Signed URL issuance
-    - `orchestrator/` – SSE chat/orchestrator (future/optional integration)
+    - `orchestrator/` – SSE chat/orchestrator
   - `run-preprocess/` – Cloud Run preprocess service (FastAPI), pipeline, and requirements
   - `deploy.ps1` – One-shot provisioning and deploy script (script-relative paths)
   - `test.ps1` – Local smoke test (upload + artifact/Firestore checks)
 - `docs/` – API drafts and operational notes
+ - `frontend/` – Vite + React app (Auth + Upload + Chat UI)
 ## Getting started (quick)
 1. Ensure you’re on the correct project and have gcloud configured.
-2. Deploy using `./backend/deploy.ps1` (this is the only supported deployment method).
+2. Deploy using scripts in `backend/` (preprocess + functions). For functions only, use `deploy-analysis.ps1`.
 3. Optionally run `./backend/test.ps1` to upload a sample CSV and verify artifacts and Firestore status.
 
-## Chat (SSE) – analysis stage
+## Frontend
 
-- The `chat` Cloud Function streams events (SSE) while it:
-  - Generates Python with Gemini 2.5 Flash;
-  - Executes it in a sandbox (Pandas/Numpy only) with a 60s hard timeout;
-  - Persists `table.json`, `metrics.json`, `chart_data.json`, `summary.json` to GCS and a message doc to Firestore.
+- Vite + React app under `frontend/` with:
+  - Firebase Anonymous Auth (see `.env.example` and create `.env.local`).
+  - File upload (paperclip) → `sign-upload-url` (signed PUT) → GCS → Eventarc → preprocess.
+  - Chat UI that streams SSE from `chat` and posts an answer on `done`.
 
-Environment variables:
-- `GEMINI_API_KEY`: required for the `chat` function (pass via your shell before running `deploy.ps1`).
-- `FILES_BUCKET`: already set by `deploy.ps1` to `ai-data-analyser-files`.
-
-Quick SSE test (PowerShell, replace `<CHAT_URL>`):
-```powershell
-$body = @{ uid = "demo-uid"; sessionId = "demo-sid"; datasetId = "<datasetId>"; question = "Top categories" } | ConvertTo-Json -Compress
-curl.exe -N -H "Origin: http://localhost:3000" -H "Content-Type: application/json" -H "X-User-Id: demo-uid" --max-time 25 -d $body "<CHAT_URL>"
+Dev setup:
+```bash
+cp frontend/.env.example frontend/.env.local
+# Fill VITE_CHAT_URL, VITE_SIGN_URL, and Firebase web app config
+npm install
+npm run dev  # serves on http://localhost:5173
 ```
 
-Frontend:
-- A minimal HTML/JS page (later) will render `chartData` using Chart.js and display the `tableSample` from the final SSE event.
+Important:
+- CORS allowlist includes: `http://localhost:5173`, Firebase Hosting origins.
+- Functions preflight allow lowercase headers (`authorization`, `content-type`, `x-session-id`).
+- Frontend passes `sessionId` as a query param to avoid custom header preflight.
 
 ## Status
-The preprocessing stage is fully functional. See `PROGRESS.md` for the latest changes and operational notes.
+- Preprocessing stage: functional.
+- Chat (SSE) orchestrator: functional with robust fallbacks in the worker to ensure valid result payloads.
+- See `PROGRESS.md` for the latest changes and operational notes.
+
+## Known limitations
+- If the LLM returns an empty `metrics` object intentionally, we currently persist it as `{}`; the worker only auto-fills metrics when the field is missing or wrong type. We may change this behavior to always include basic row/column counts.
+- Charts are optional; if not requested/returned, `chart_data.json` may be minimal or empty.

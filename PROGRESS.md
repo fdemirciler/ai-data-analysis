@@ -1,9 +1,11 @@
 # AI Data Analyst – Progress Report
 
-Date: 2025-09-26 10:55 (+03:00)
+Date: 2025-10-03 01:47 (+02:00)
 
 ## Current Status
 - **Preprocessing is fully functional**. Upload via signed URL triggers preprocessing; artifacts are generated and Firestore status advances to `ready`.
+- **Frontend integrated (Auth + Upload + Chat SSE)**. Firebase Anonymous Auth, upload via signed URL, and chat SSE orchestrator are working end-to-end. Artifacts (`table.json`, `metrics.json`, `chart_data.json`, `summary.json`) are produced and signed for browser access.
+- **CORS aligned for dev**. Dev runs on `http://localhost:5173`; functions allow Origin and lowercase headers in preflight. Frontend passes `sessionId` as a query param to avoid custom header preflight.
 - **End-to-end smoke tests pass** using `test.ps1`.
 
 ## Deployed Components
@@ -104,6 +106,17 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-10-03**
+  - Frontend
+    - Integrated AuthContext with Firebase Anonymous Auth; `.env.example` added; dev server port set to `5173`.
+    - File upload wired to `sign-upload-url`; removed `X-Session-Id` header in favor of `sessionId` query param.
+    - Chat SSE integrated; added robust spinner stop in `App.tsx` `finally` after stream ends; fixed file input reset in `ChatInput.tsx`.
+  - Backend
+    - CORS preflight updated to include lowercase `authorization`, `content-type`, `x-session-id` in both functions.
+    - Orchestrator worker now coerces non-dict returns (DataFrame/list) and fills missing keys to avoid `run() must return a dict` surfacing to users.
+  - Deploy
+    - `deploy-analysis.ps1` now uses `--env-vars-file` with YAML files (`env.sign-upload-url.yaml`, `env.chat.yaml`) to reliably pass `ALLOWED_ORIGINS` on Windows PowerShell.
+    - Printed function URLs unchanged; redeploy confirmed.
 - **2025-10-01**
   - Backend Performance – Step 1 implemented.
     - Orchestrator (`backend/functions/orchestrator/main.py`)

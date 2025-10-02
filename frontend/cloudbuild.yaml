@@ -1,0 +1,23 @@
+# cloudbuild.yaml
+steps:
+  # 1. Change to the frontend directory and install dependencies
+  # We use a specific node version and npm ci for speed and consistency.
+  - name: 'gcr.io/cloud-builders/npm:18'
+    args: ['ci']
+    dir: 'frontend'
+
+  # 2. Build the production application
+  # This runs the "build" script from your frontend/package.json
+  - name: 'gcr.io/cloud-builders/npm:18'
+    args: ['run', 'build']
+    dir: 'frontend'
+
+  # 3. Deploy to Firebase Hosting
+  # This step uses a builder that has the Firebase CLI.
+  # The '--project' flag is optional if the build is running in the same project.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - 'npm install -g firebase-tools && firebase deploy --only hosting --project ai-data-analyser --non-interactive'
+    dir: 'frontend'

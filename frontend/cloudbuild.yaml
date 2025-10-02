@@ -21,5 +21,5 @@ steps:
 
 # Set the working directory for all steps to 'frontend'
 options:
-  dir: 'frontend'
+  
   logging: CLOUD_LOGGING_ONLY

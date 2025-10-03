@@ -70,6 +70,9 @@ gcloud secrets add-iam-policy-binding GEMINI_API_KEY `
 # ============================================
 # Deploy Functions Gen2: sign-upload-url (HTTP)
 # ============================================
+# Auth flag (set ALLOW_UNAUTHENTICATED=1 in env for dev convenience)
+$AUTH_FLAG = if ($env:ALLOW_UNAUTHENTICATED -eq "1") { "--allow-unauthenticated" } else { "" }
+
 gcloud functions deploy sign-upload-url `
   --gen2 `
   --runtime=python312 `
@@ -77,7 +80,7 @@ gcloud functions deploy sign-upload-url `
   --source="$SRC_FN_SIGN" `
   --entry-point="sign_upload_url" `
   --trigger-http `
-  --allow-unauthenticated `
+  $AUTH_FLAG `
   --service-account="$SERVICE_ACCOUNT" `
   --env-vars-file="$SIGN_ENV_FILE"
 
@@ -91,7 +94,7 @@ gcloud functions deploy chat `
   --source="$SRC_FN_ORCH" `
   --entry-point="chat" `
   --trigger-http `
-  --allow-unauthenticated `
+  $AUTH_FLAG `
   --service-account="$SERVICE_ACCOUNT" `
   --memory=512Mi `
   --env-vars-file="$CHAT_ENV_FILE" `

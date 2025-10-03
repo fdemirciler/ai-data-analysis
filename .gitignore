@@ -46,6 +46,11 @@ venv/
 !.env.local.example
 /frontend/.env
 /frontend/.env.local
+/frontend/.env.development
+/backend/env.chat.yaml
+/backend/env.sign-upload-url.yaml
+/backend/env.chat.env
+/backend/env.sign-upload-url.env
 
 # Python tooling caches
 .mypy_cache/
@@ -70,3 +75,6 @@ test_files
 
 
 final_project_design.md
+
+backend/env.chat.env
+backend/env.sign-upload-url.env

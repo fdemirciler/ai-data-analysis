@@ -45,7 +45,7 @@ flowchart TD
     - `sign_upload_url/` – Signed URL issuance
     - `orchestrator/` – SSE chat/orchestrator
   - `run-preprocess/` – Cloud Run preprocess service (FastAPI), pipeline, and requirements
-  - `deploy.ps1` – One-shot provisioning and deploy script (script-relative paths)
+  - `deploy-preprocess.ps1` – One-shot provisioning and deploy script (script-relative paths)
   - `test.ps1` – Local smoke test (upload + artifact/Firestore checks)
 - `docs/` – API drafts and operational notes
  - `frontend/` – Vite + React app (Auth + Upload + Chat UI)
@@ -57,14 +57,14 @@ flowchart TD
 ## Frontend
 
 - Vite + React app under `frontend/` with:
-  - Firebase Anonymous Auth (see `.env.example` and create `.env.local`).
+  - Firebase Anonymous Auth (see `.env.example` and create `.env.development` for local dev).
   - File upload (paperclip) → `sign-upload-url` (signed PUT) → GCS → Eventarc → preprocess.
   - Chat UI that streams SSE from `chat` and posts an answer on `done`.
 
 Dev setup:
 ```bash
-cp frontend/.env.example frontend/.env.local
-# Fill VITE_CHAT_URL, VITE_SIGN_URL, and Firebase web app config
+cp frontend/.env.example frontend/.env.development
+# Fill VITE_CHAT_URL, VITE_SIGN_URL, and Firebase web app config for local dev
 npm install
 npm run dev  # serves on http://localhost:5173
 ```
@@ -73,6 +73,25 @@ Important:
 - CORS allowlist includes: `http://localhost:5173`, Firebase Hosting origins.
 - Functions preflight allow lowercase headers (`authorization`, `content-type`, `x-session-id`).
 - Frontend passes `sessionId` as a query param to avoid custom header preflight.
+
+Production env guidance:
+- The app defaults to relative endpoints `/api/sign-upload-url` and `/api/chat` in production via Firebase Hosting rewrites (see `frontend/firebase.json`).
+- Do not set `VITE_CHAT_URL` or `VITE_SIGN_URL` when building for production; leaving them unset enables the `/api/*` fallback.
+- For development, use `.env.development` to point to function URLs explicitly.
+
+Chat persistence and UI:
+- Frontend persists sessions/messages to Firestore under `users/{uid}/sessions/{sid}/messages/{mid}`.
+- On startup, the app loads the last ~5 sessions into the sidebar and hydrates messages for the active one.
+- SSE events produce a live assistant placeholder that updates status and finally renders:
+  - summary (text),
+  - a sample table (`tableSample`),
+  - and a chart (`chartData`, bar/line) using Recharts.
+  Renderers live under `frontend/src/components/renderers/`.
+
+Sandbox hardening plan (Phase 3):
+- Execute generated code in a hardened container (Cloud Run Job) with gVisor, CPU/memory limits, and no outbound network.
+- Keep as a configurable toggle to allow iterative rollout; current orchestrator path remains functional.
+- IAM and minimal scopes enforced; artifacts are short-lived, HTTPS-signed for client access.
 
 ## Status
 - Preprocessing stage: functional.

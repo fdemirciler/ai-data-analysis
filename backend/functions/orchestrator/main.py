@@ -25,6 +25,7 @@ import google.auth.transport.requests
 
 import gemini_client
 import sandbox_runner
+from google.api_core import exceptions as gax_exceptions  # type: ignore
 
 # Optional: read payload from GCS later if needed
 # from google.cloud import storage
@@ -312,6 +313,9 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
     try:
         result = json.loads(proc.stdout.decode("utf-8"))
+    except json.JSONDecodeError as e:  # type: ignore[attr-defined]
+        yield _sse_format({"type": "error", "data": {"code": "BAD_RESULT_JSON", "message": str(e)[:300]}})
+        return
     except Exception as e:  # noqa: BLE001
         yield _sse_format({"type": "error", "data": {"code": "BAD_RESULT", "message": str(e)[:300]}})
         return
@@ -319,6 +323,13 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     table = result.get("table") or []
     metrics = result.get("metrics") or {}
     chart_data = result.get("chartData") or {}
+    # Final validation/coercion before persist
+    if not isinstance(table, list):
+        table = []
+    if not isinstance(metrics, dict):
+        metrics = {}
+    if not isinstance(chart_data, dict):
+        chart_data = {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}
     table_sample = table[: min(len(table), 50)]
 
     # summarizing (use fused pre-run summary)
@@ -347,9 +358,15 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                                   json.dumps({"summary": summary}, ensure_ascii=False), content_type="application/json"))
             for f in futs:
                 f.result()
+    except gax_exceptions.GoogleAPICallError as e:  # type: ignore[attr-defined]
+        yield _sse_format({"type": "error", "data": {"code": "PERSIST_API_ERROR", "message": str(e)[:400]}})
+        return
     except Exception as e:  # noqa: BLE001
         yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)[:400]}})
         return
+
+    # Sign artifact URIs for browser access (general path)
+    uris = _sign_uris(uris_gs)
 
     # Firestore message doc
     fs = firestore.Client(project=PROJECT_ID)

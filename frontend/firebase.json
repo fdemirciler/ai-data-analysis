@@ -8,6 +8,22 @@
     ],
     "frameworksBackend": {
       "region": "europe-west1"
-    }
+    },
+    "rewrites": [
+      {
+        "source": "/api/sign-upload-url",
+        "function": {
+          "functionId": "sign-upload-url",
+          "region": "europe-west4"
+        }
+      },
+      {
+        "source": "/api/chat",
+        "function": {
+          "functionId": "chat",
+          "region": "europe-west4"
+        }
+      }
+    ]
   }
 }

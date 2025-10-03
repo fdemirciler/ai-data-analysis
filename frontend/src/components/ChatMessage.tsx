@@ -1,13 +1,49 @@
 import React from "react";
 import { cn } from "./ui/utils";
 import { Bot } from "lucide-react";
+import { TableRenderer } from "./renderers/TableRenderer";
+import { ChartRenderer } from "./renderers/ChartRenderer";
 
-export interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-}
+export type Message =
+  | {
+      id: string;
+      role: "user" | "assistant";
+      timestamp: Date;
+      kind: "text";
+      content: string;
+    }
+  | {
+      id: string;
+      role: "user" | "assistant";
+      timestamp: Date;
+      kind: "status";
+      content: string;
+    }
+  | {
+      id: string;
+      role: "assistant";
+      timestamp: Date;
+      kind: "error";
+      content: string;
+    }
+  | {
+      id: string;
+      role: "assistant";
+      timestamp: Date;
+      kind: "table";
+      rows: any[];
+    }
+  | {
+      id: string;
+      role: "assistant";
+      timestamp: Date;
+      kind: "chart";
+      chartData: {
+        kind: string;
+        labels: string[];
+        series: { label: string; data: number[] }[];
+      };
+    };
 
 interface ChatMessageProps {
   message: Message;
@@ -35,9 +71,21 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) =
 
         {/* Message Content */}
         <div className="flex-1 space-y-2 pt-1">
-          <div className="whitespace-pre-wrap break-words">
-            {message.content}
-          </div>
+          {message.kind === "text" && (
+            <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          )}
+          {message.kind === "status" && (
+            <div className="whitespace-pre-wrap break-words text-muted-foreground italic">
+              {message.content}
+            </div>
+          )}
+          {message.kind === "error" && (
+            <div className="whitespace-pre-wrap break-words border border-red-300 bg-red-50 text-red-800 rounded-xl p-4">
+              {message.content}
+            </div>
+          )}
+          {message.kind === "table" && <TableRenderer rows={message.rows} />}
+          {message.kind === "chart" && <ChartRenderer chartData={message.chartData} />}
         </div>
       </div>
     </div>

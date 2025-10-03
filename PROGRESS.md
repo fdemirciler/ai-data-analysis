@@ -117,6 +117,38 @@ flowchart TD
   - Deploy
     - `deploy-analysis.ps1` now uses `--env-vars-file` with YAML files (`env.sign-upload-url.yaml`, `env.chat.yaml`) to reliably pass `ALLOWED_ORIGINS` on Windows PowerShell.
     - Printed function URLs unchanged; redeploy confirmed.
+
+- **2025-10-03 (later)**
+  - Frontend (Phase 1)
+    - Implemented assistant placeholder message pushed immediately upon send with `kind: "status"` and live status updates mapped from SSE events (`validating`, `generating_code`, `running_fast`, `summarizing`, `persisting`).
+    - Upgraded message model to a discriminated union (`text|status|error|table|chart`).
+    - Added `TableRenderer.tsx` and `ChartRenderer.tsx` (Recharts) and updated `ChatMessage.tsx` to dispatch per kind.
+    - On `done`, convert placeholder to summary text and append separate table and chart bubbles when present.
+  - Backend (Phase 1)
+    - Fixed artifact URL signing in `functions/orchestrator/main.py` general path: now signs `uris_gs` → `uris` before Firestore write and SSE `done`.
+  - Hosting/Deploy (Phase 1)
+    - Added Firebase Hosting rewrites for `/api/sign-upload-url` and `/api/chat` to Functions Gen2 in `europe-west4`.
+    - Parameterized `--allow-unauthenticated` in `backend/deploy-analysis.ps1` via `ALLOW_UNAUTHENTICATED` env var (default off) for production auth at the edge via Hosting.
+
+- **2025-10-03 (Phase 2)**
+  - Frontend
+    - Added Cancel button wired to `AbortController`; converts assistant placeholder to `Cancelled.` and resets typing.
+    - Fixed JSX mismatches in `App.tsx` introduced during edits.
+
+- **2025-10-03 (Phase 3)**
+  - Backend
+    - Refined exception handling in `functions/orchestrator/main.py`: specific `json.JSONDecodeError` and `GoogleAPICallError` handling with clearer error codes.
+    - Added final result validation/coercion before persistence (ensure `summary` non-empty fallback; shape guards for `table`, `metrics`, `chartData`).
+  - Ops
+    - Added GCS lifecycle rule: delete objects under `users/` prefix after 1 day via `deploy-preprocess.ps1`.
+
+- **2025-10-03 (Phase 4)**
+  - Frontend
+    - Implemented Firestore chat persistence helpers in `frontend/src/services/firestore.ts` (ensure session, update dataset, save user messages, load last ~5 sessions with messages).
+    - Integrated persistence into `App.tsx` (create session on new chat/ensure, update datasetId after upload, save user messages, hydrate recent sessions on auth ready).
+    - Added `frontend/.env.example`; development now recommends `.env.development`. Production builds default to `/api/*` endpoints via Hosting rewrites when env vars are unset.
+  - Tests
+    - Enhanced `backend/test.ps1`: SSE smoke test now checks that `done` contains HTTPS signed URLs (`uris.*`) and attempts to fetch them.
 - **2025-10-01**
   - Backend Performance – Step 1 implemented.
     - Orchestrator (`backend/functions/orchestrator/main.py`)

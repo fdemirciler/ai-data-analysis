@@ -57,6 +57,29 @@ gcloud storage buckets add-iam-policy-binding gs://$BUCKET `
   --member="serviceAccount:$SERVICE_ACCOUNT" `
   --role="roles/storage.objectAdmin"
 
+# =============================
+# GCS lifecycle: users/ → 1 day
+# =============================
+$lifecycleFile = Join-Path $env:TEMP "gcs_lifecycle_users.json"
+@'
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {"age": 1, "matchesPrefix": ["users/"]}
+    }
+  ]
+}
+'@ | Out-File -FilePath $lifecycleFile -Encoding ascii -NoNewline
+try {
+  gsutil lifecycle set $lifecycleFile gs://$BUCKET
+  Write-Host "Applied GCS lifecycle rule: delete users/ after 1 day."
+} catch {
+  Write-Host "Warning: failed to set lifecycle:" $_.Exception.Message
+} finally {
+  if (Test-Path $lifecycleFile) { Remove-Item $lifecycleFile -Force }
+}
+
 # ==================================================
 # Eventarc: permissions + trigger for GCS Object Finalize
 # ==================================================

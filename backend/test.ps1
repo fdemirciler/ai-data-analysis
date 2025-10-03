@@ -112,7 +112,7 @@ if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
   $body | Out-File -FilePath $payloadPath -Encoding utf8 -NoNewline
   try {
     & curl.exe -sN `
-      -H "Origin: http://localhost:3000" `
+      -H "Origin: http://localhost:5173" `
       -H "Content-Type: application/json" `
       -H "X-User-Id: $UID" `
       -H "X-Session-Id: $SID" `
@@ -127,10 +127,21 @@ if ($CHAT_URL -and ($CHAT_URL -match '^https?://')) {
         $jsonLine = ($doneMatch.Line -replace '^data:\s*','')
         $evt = $jsonLine | ConvertFrom-Json
         $msgId = $evt.data.messageId
+        $uris  = $evt.data.uris
         if ($msgId) {
           $resultsPrefix = "users/$UID/sessions/$SID/results/$msgId"
           Write-Host "Verifying analysis artifacts at gs://$BUCKET/$resultsPrefix/"
           gcloud storage ls "gs://$BUCKET/$resultsPrefix/**"
+          # Verify HTTPS signed URLs exist and fetch 200
+          if ($uris -and $uris.table -and ($uris.table -match '^https://')) {
+            try { Invoke-WebRequest -Uri $uris.table -Method GET -TimeoutSec 10 | Out-Null; Write-Host "OK: table.json signed URL fetchable" } catch { Write-Host "Warning: table.json signed URL fetch failed: $($_.Exception.Message)" }
+          } else { Write-Host "Warning: missing or non-HTTPS table URL in done event" }
+          if ($uris -and $uris.metrics -and ($uris.metrics -match '^https://')) {
+            try { Invoke-WebRequest -Uri $uris.metrics -Method GET -TimeoutSec 10 | Out-Null; Write-Host "OK: metrics.json signed URL fetchable" } catch { Write-Host "Warning: metrics.json signed URL fetch failed: $($_.Exception.Message)" }
+          } else { Write-Host "Warning: missing or non-HTTPS metrics URL in done event" }
+          if ($uris -and $uris.chartData -and ($uris.chartData -match '^https://')) {
+            try { Invoke-WebRequest -Uri $uris.chartData -Method GET -TimeoutSec 10 | Out-Null; Write-Host "OK: chart_data.json signed URL fetchable" } catch { Write-Host "Warning: chart_data.json signed URL fetch failed: $($_.Exception.Message)" }
+          } else { Write-Host "Warning: missing or non-HTTPS chartData URL in done event" }
         } else {
           Write-Host "SSE parse warning: messageId missing in done event"
         }

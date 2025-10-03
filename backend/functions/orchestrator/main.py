@@ -205,13 +205,13 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futs = []
                 futs.append(ex.submit(bucket.blob(f"{results_prefix}/table.json").upload_from_string,
-                                      json.dumps(table, ensure_ascii=False), content_type="application/json"))
+                                     json.dumps(table, ensure_ascii=False), content_type="application/json"))
                 futs.append(ex.submit(bucket.blob(f"{results_prefix}/metrics.json").upload_from_string,
-                                      json.dumps(metrics, ensure_ascii=False), content_type="application/json"))
+                                     json.dumps(metrics, ensure_ascii=False), content_type="application/json"))
                 futs.append(ex.submit(bucket.blob(f"{results_prefix}/chart_data.json").upload_from_string,
-                                      json.dumps(chart_data, ensure_ascii=False), content_type="application/json"))
+                                     json.dumps(chart_data, ensure_ascii=False), content_type="application/json"))
                 futs.append(ex.submit(bucket.blob(f"{results_prefix}/summary.json").upload_from_string,
-                                      json.dumps({"summary": "Dataset metadata provided."}, ensure_ascii=False), content_type="application/json"))
+                                     json.dumps({"summary": "Dataset metadata provided."}, ensure_ascii=False), content_type="application/json"))
                 for f in futs:
                     f.result()
         except Exception as e:  # noqa: BLE001
@@ -274,10 +274,10 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         elif ORCH_IPC_MODE == "arrow":
             # Download parquet bytes → read as Arrow Table → serialize IPC stream
             parquet_bytes = blob.download_as_bytes()
-            table = pq.read_table(pa.BufferReader(parquet_bytes))
+            table_arrow = pq.read_table(pa.BufferReader(parquet_bytes))
             sink = pa.BufferOutputStream()
-            with pa.ipc.new_stream(sink, table.schema) as writer:
-                writer.write_table(table)
+            with pa.ipc.new_stream(sink, table_arrow.schema) as writer:
+                writer.write_table(table_arrow)
             arrow_ipc_b64 = base64.b64encode(sink.getvalue().to_pybytes()).decode("ascii")
         else:
             parquet_path = f"/tmp/{dataset_id}_cleaned.parquet"
@@ -332,9 +332,14 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         chart_data = {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}
     table_sample = table[: min(len(table), 50)]
 
-    # summarizing (use fused pre-run summary)
+    # summarizing (generate summary from actual results)
     yield _sse_format({"type": "summarizing"})
-    summary = pre_summary or ""
+    try:
+        summary = gemini_client.generate_summary(question, table_sample, metrics)
+    except Exception as e:
+        print(f"WARNING: Summary generation failed: {e}", file=sys.stderr)
+        # Fallback to the pre-run summary if post-run generation fails
+        summary = pre_summary or "Analysis complete. See chart and table for details."
 
     # persist
     yield _sse_format({"type": "persisting"})
@@ -349,13 +354,13 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         with ThreadPoolExecutor(max_workers=4) as ex:
             futs = []
             futs.append(ex.submit(bucket.blob(f"{results_prefix}/table.json").upload_from_string,
-                                  json.dumps(table, ensure_ascii=False), content_type="application/json"))
+                                 json.dumps(table, ensure_ascii=False), content_type="application/json"))
             futs.append(ex.submit(bucket.blob(f"{results_prefix}/metrics.json").upload_from_string,
-                                  json.dumps(metrics, ensure_ascii=False), content_type="application/json"))
+                                 json.dumps(metrics, ensure_ascii=False), content_type="application/json"))
             futs.append(ex.submit(bucket.blob(f"{results_prefix}/chart_data.json").upload_from_string,
-                                  json.dumps(chart_data, ensure_ascii=False), content_type="application/json"))
+                                 json.dumps(chart_data, ensure_ascii=False), content_type="application/json"))
             futs.append(ex.submit(bucket.blob(f"{results_prefix}/summary.json").upload_from_string,
-                                  json.dumps({"summary": summary}, ensure_ascii=False), content_type="application/json"))
+                                 json.dumps({"summary": summary}, ensure_ascii=False), content_type="application/json"))
             for f in futs:
                 f.result()
     except gax_exceptions.GoogleAPICallError as e:  # type: ignore[attr-defined]
@@ -365,27 +370,47 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)[:400]}})
         return
 
-    # Sign artifact URIs for browser access (general path)
-    uris = _sign_uris(uris_gs)
-
     # Firestore message doc
-    fs = firestore.Client(project=PROJECT_ID)
-    msg_ref = (
-        fs.collection("users")
-        .document(uid)
-        .collection("sessions")
-        .document(session_id)
-        .collection("messages")
-        .document(message_id)
-    )
-    msg_ref.set({
-        "role": "assistant",
-        "question": question,
-        "content": summary,
-        "createdAt": datetime.now(timezone.utc),
-        "status": "done",
-        "uris": uris,
-    })
+    try:
+        fs = firestore.Client(project=PROJECT_ID)
+        doc_path = f"users/{uid}/sessions/{session_id}/messages/{message_id}"
+        print(f"DEBUG: Preparing to write to Firestore path: {doc_path}")
+
+        # Check for empty or None values in the path
+        if not all([uid, session_id, message_id]):
+            print(f"CRITICAL ERROR: One or more IDs are empty. UID='{uid}', SessionID='{session_id}', MessageID='{message_id}'. Aborting Firestore write.", file=sys.stderr)
+            yield _sse_format({"type": "error", "data": {"code": "FIRESTORE_PATH_INVALID", "message": "UID, session, or message ID was empty."}})
+            return
+
+        msg_data = {
+            "uid": uid,
+            "sessionId": session_id,
+            "datasetId": dataset_id,
+            "question": question,
+            "summary": summary,
+            "tableSample": table_sample,
+            "chartData": chart_data,
+            "uris": uris_gs,  # Storing the gs:// URIs in Firestore
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "role": "assistant",
+            "status": "done",
+        }
+        
+        print(f"DEBUG: Data for Firestore: {json.dumps(msg_data, indent=2, default=str)}")
+
+        msg_ref = fs.document(doc_path)
+        msg_ref.set(msg_data)
+        
+        print("DEBUG: Firestore write successful.")
+
+    except Exception as e:
+        print(f"CRITICAL ERROR during Firestore write: {e}", file=sys.stderr)
+        yield _sse_format({"type": "error", "data": {"code": "FIRESTORE_WRITE_FAILED", "message": str(e)}})
+        return # Stop execution if Firestore fails
+    
+    # Sign artifact URIs for browser access (general path)
+    print("DEBUG: Signing URIs for SSE response...")
+    uris = _sign_uris(uris_gs)
 
     # done
     yield _sse_format({
@@ -450,3 +475,4 @@ def chat(request: Request) -> Response:
         return Response(_events(session_id, dataset_id, uid, question), headers=headers, status=200)
     except Exception as e:  # noqa: BLE001
         return (json.dumps({"error": "internal error", "detail": str(e)[:500]}), 500, {"Content-Type": "application/json"})
+

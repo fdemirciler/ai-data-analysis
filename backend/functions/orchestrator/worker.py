@@ -32,6 +32,18 @@ import pyarrow as pa  # type: ignore
 ALLOWED_IMPORTS = {"pandas", "numpy", "math", "json"}
 
 
+def sanitize_for_firestore(obj):
+    """Recursively traverses a dict/list to replace NaN, Inf, -Inf with None."""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_firestore(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_firestore(item) for item in obj]
+    elif isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+    return obj
+
+
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: D401
     """Restricted import: only allow ALLOWED_IMPORTS root modules."""
     root = name.split(".")[0]
@@ -45,30 +57,10 @@ def _prepare_globals():
 
     safe_builtins = {}
     allowlist = {
-        "abs",
-        "all",
-        "any",
-        "bool",
-        "dict",
-        "enumerate",
-        "filter",
-        "float",
-        "int",
-        "len",
-        "list",
-        "map",
-        "max",
-        "min",
-        "pow",
-        "range",
-        "round",
-        "set",
-        "slice",
-        "sorted",
-        "str",
-        "sum",
-        "zip",
-        "print",  # benign
+        "abs", "all", "any", "bool", "dict", "enumerate", "filter",
+        "float", "int", "len", "list", "map", "max", "min", "pow",
+        "range", "round", "set", "slice", "sorted", "str", "sum",
+        "zip", "print",  # benign
     }
     for k in allowlist:
         if hasattr(_builtins, k):
@@ -180,8 +172,11 @@ def main() -> int:
         if "chartData" not in result or not isinstance(result.get("chartData"), dict):
             # Minimal chart
             result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"]
-
-        sys.stdout.write(json.dumps(result, ensure_ascii=False))
+        
+        # --- NEW: Sanitize the entire result object for Firestore/JSON compatibility ---
+        sanitized_result = sanitize_for_firestore(result)
+        
+        sys.stdout.write(json.dumps(sanitized_result, ensure_ascii=False))
         return 0
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"Runtime error: {e}\n")

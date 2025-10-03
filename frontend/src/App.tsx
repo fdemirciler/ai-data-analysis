@@ -19,56 +19,11 @@ interface Conversation {
 
 export default function App() {
   const { idToken, loading, user } = useAuth();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dailyUsed, setDailyUsed] = useState(3);
   const dailyLimit = 50;
-  const [conversations, setConversations] = useState<Conversation[]>([
-    {
-      id: "1",
-      title: "Getting started with React",
-      timestamp: new Date(Date.now() - 86400000),
-      messages: [
-        {
-          id: "1-1",
-          role: "user",
-          kind: "text",
-          content: "How do I get started with React?",
-          timestamp: new Date(Date.now() - 86400000),
-        },
-        {
-          id: "1-2",
-          role: "assistant",
-          kind: "text",
-          content:
-            "Getting started with React is straightforward! Here are the key steps:\n\n1. Install Node.js if you haven't already\n2. Use Create React App or Vite to bootstrap your project\n3. Learn about components, props, and state\n4. Practice building small projects\n\nWould you like me to explain any of these steps in more detail?",
-          timestamp: new Date(Date.now() - 86400000),
-        },
-      ],
-    },
-    {
-      id: "2",
-      title: "CSS Grid vs Flexbox",
-      timestamp: new Date(Date.now() - 172800000),
-      messages: [
-        {
-          id: "2-1",
-          role: "user",
-          kind: "text",
-          content: "What's the difference between CSS Grid and Flexbox?",
-          timestamp: new Date(Date.now() - 172800000),
-        },
-        {
-          id: "2-2",
-          role: "assistant",
-          kind: "text",
-          content:
-            "Great question! Here's the main difference:\n\n**Flexbox** is one-dimensional - it handles layout in a single direction (row or column). It's perfect for:\n- Navigation bars\n- Card layouts\n- Centering items\n\n**CSS Grid** is two-dimensional - it handles both rows and columns simultaneously. It's ideal for:\n- Page layouts\n- Complex grid systems\n- Magazine-style designs\n\nIn practice, you'll often use both together!",
-          timestamp: new Date(Date.now() - 172800000),
-        },
-      ],
-    },
-  ]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>("1");
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -76,6 +31,7 @@ export default function App() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevConvIdRef = useRef<string | null>(null);
   const placeholderIdRef = useRef<string | null>(null);
+  const didInitRef = useRef<boolean>(false);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
@@ -108,6 +64,18 @@ export default function App() {
       ensureSession(user.uid, newConversation.id, newConversation.title).catch(() => {});
     }
   };
+
+  // Start with a new chat on first mount if nothing is loaded
+  useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+    if (conversations.length === 0) {
+      // Defer to next tick to avoid strict-mode double invokes causing two creations
+      setTimeout(() => {
+        if (conversations.length === 0) handleNewChat();
+      }, 0);
+    }
+  }, []);
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
@@ -166,8 +134,13 @@ export default function App() {
         try {
           const sessions = await getRecentSessionsWithMessages(user.uid, 5);
           if (sessions.length > 0) {
-            setConversations(sessions as any);
-            setActiveConversationId(sessions[0].id);
+            setConversations((prev) => {
+              if (!prev || prev.length === 0) return sessions as any;
+              const prevIds = new Set(prev.map((c) => c.id));
+              const newOnes = sessions.filter((s: any) => !prevIds.has(s.id)) as any;
+              return [...prev, ...newOnes];
+            });
+            setActiveConversationId((prev) => prev ?? sessions[0].id);
           } else {
             // keep defaults / empty
           }

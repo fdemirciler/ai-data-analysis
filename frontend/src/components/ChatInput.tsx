@@ -104,7 +104,7 @@ export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputPr
         </div>
         
         <p className="text-xs text-muted-foreground text-center mt-2">
-          Press Enter to send, Shift+Enter for new line
+          Upload CSV/Excel files, 20 MB file limit. Press Enter to send, Shift+Enter for new line.
         </p>
       </div>
     </div>

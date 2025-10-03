@@ -52,6 +52,14 @@ interface ChatMessageProps {
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) => {
   const isUser = message.role === "user";
+  const timeStr = React.useMemo(() => {
+    const d = message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp as any);
+    try {
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+    } catch {
+      return "";
+    }
+  }, [message.timestamp]);
 
   return (
     <div className="w-full py-8 px-4">
@@ -86,6 +94,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) =
           )}
           {message.kind === "table" && <TableRenderer rows={message.rows} />}
           {message.kind === "chart" && <ChartRenderer chartData={message.chartData} />}
+          <div className="text-xs text-muted-foreground">{timeStr}</div>
         </div>
       </div>
     </div>

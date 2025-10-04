@@ -2,18 +2,18 @@ import { initializeApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// ✅ Static config from Firebase Console (Project Settings → General → SDK setup)
+// ✅ Read Firebase config from environment variables (.env.development / .env.production)
 const firebaseConfig = {
-  apiKey: "AIzaSyAm6Qmw7rXbNvYmkCgyLr25677Uy7NKlLU",
-  authDomain: "ai-data-analyser.firebaseapp.com",
-  projectId: "ai-data-analyser",
-  storageBucket: "ai-data-analyser.appspot.com",
-  messagingSenderId: "1012295827257",
-  appId: "1:1012295827257:web:749760706a3d959f02f2e8",
-  measurementId: "G-FH9B37VLFL",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// Prevent double initialization (important if this file is imported multiple times)
+// ✅ Initialize Firebase only once (prevents duplicate app errors during hot reloads)
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 
 export const auth = getAuth(app);

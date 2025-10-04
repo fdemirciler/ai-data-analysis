@@ -1,18 +1,20 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Read config from Vite env. Provide empty strings as fallbacks so build doesn't fail.
+// ✅ Static config from Firebase Console (Project Settings → General → SDK setup)
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
+  apiKey: "AIzaSyAm6Qmw7rXbNvYmkCgyLr25677Uy7NKlLU",
+  authDomain: "ai-data-analyser.firebaseapp.com",
+  projectId: "ai-data-analyser",
+  storageBucket: "ai-data-analyser.appspot.com",
+  messagingSenderId: "1012295827257",
+  appId: "1:1012295827257:web:749760706a3d959f02f2e8",
+  measurementId: "G-FH9B37VLFL",
 };
 
-const app = initializeApp(firebaseConfig);
+// Prevent double initialization (important if this file is imported multiple times)
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);

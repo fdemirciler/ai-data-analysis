@@ -35,19 +35,25 @@ export async function getSignedUploadUrl(params: {
   size: number;
   type: string;
 }): Promise<SignedUrlResponse> {
-  const { signUrl, idToken, sessionId, filename, size, type } = params;
-  const u = new URL(signUrl);
-  u.searchParams.set("filename", filename);
-  u.searchParams.set("size", String(size));
-  u.searchParams.set("type", type);
-  u.searchParams.set("sessionId", sessionId);
+  // Use URLSearchParams to safely build the query string.
+  const query = new URLSearchParams({
+    sessionId: params.sessionId,
+    filename: params.filename,
+    size: params.size.toString(),
+    type: params.type,
+  });
 
-  const res = await fetch(u.toString(), {
+  // Append the query string to the base URL. This works for both
+  // absolute URLs (like http://localhost...) and relative ones (/api/...).
+  const fullUrl = `${params.signUrl}?${query.toString()}`;
+
+  const res = await fetch(fullUrl, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${idToken}`,
+      Authorization: `Bearer ${params.idToken}`,
     },
   });
+
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`sign-upload-url failed ${res.status}: ${txt}`);
@@ -78,7 +84,8 @@ export async function streamChat(params: {
   signal?: AbortSignal;
   onEvent: (ev: ChatEvent) => void;
 }) {
-  const { chatUrl, idToken, sessionId, datasetId, question, signal, onEvent } = params;
+  const { chatUrl, idToken, sessionId, datasetId, question, signal, onEvent } =
+    params;
 
   await fetchEventSource(chatUrl, {
     method: "POST",

@@ -11,7 +11,7 @@ except Exception:  # fallback for direct invocation
 def test_drop_fully_blank_rows_pl():
     df = pl.DataFrame({
         "a": [None, " ", "value", None],
-        "b": [None, "\t", 123, "-"],
+        "b": [None, "\t", "123", "-"],
     })
     # '-' is a NULL_TOKEN per shared constants
     cleaned = _drop_fully_blank_rows_pl(df)
@@ -28,8 +28,8 @@ def test_detect_header_row_pl():
     # First row looks like header (alpha), second more numeric
     df = pl.DataFrame({
         "c0": ["Product", "A", "B"],
-        "c1": ["Revenue", 100, 200],
-        "c2": ["Qty", 1, 3],
+        "c1": ["Revenue", "100", "200"],
+        "c2": ["Qty", "1", "3"],
     })
     # The adapter reads CSVs without header; emulate that by providing rows as values
     # Here, row 0 is header-like

@@ -172,6 +172,21 @@ def main() -> int:
         if "chartData" not in result or not isinstance(result.get("chartData"), dict):
             # Minimal chart
             result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"]
+
+        # Cheap quality gate for common analytic intents
+        try:
+            q = str((ctx or {}).get("question") or "").lower()
+            intent_tokens = ("compare", "variance", "var", "difference", "diff", "change", "trend", "delta")
+            requires_computed = any(tok in q for tok in intent_tokens)
+            if requires_computed and result.get("table"):
+                table_cols = set(result["table"][0].keys()) if result["table"] else set()
+                raw_cols = set(map(str, df.columns.tolist()))
+                computed_cols = table_cols - raw_cols
+                if len(computed_cols) == 0:
+                    # Clean UX error result instead of a generic preview
+                    result = {"table": [], "metrics": {}, "chartData": {}, "error": "Result appears generic; no computed columns for requested analysis."}
+        except Exception:
+            pass
         
         # --- NEW: Sanitize the entire result object for Firestore/JSON compatibility ---
         sanitized_result = sanitize_for_firestore(result)

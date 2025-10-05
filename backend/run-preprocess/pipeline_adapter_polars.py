@@ -10,10 +10,11 @@ from __future__ import annotations
 import io
 import re
 import math
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import polars as pl  # type: ignore
 import pandas as pd
+import os
 
 # Reuse shared types and helpers with robust import (package/script modes)
 try:
@@ -103,9 +104,9 @@ def _numeric_expr_for(col: str) -> pl.Expr:
     lower = s.str.to_lowercase()
     s = pl.when(lower.is_in(list(NULL_TOKENS))).then(None).otherwise(s)
 
-    # Detect negatives
+    # Detect negatives via parentheses, then drop parentheses for casting
     mask_paren = s.str.contains(PARENS_PATTERN.pattern, literal=False)
-    s = s.str.replace(r"^[\(](.*)[\)]$", r"\1", literal=False)
+    s = s.str.replace_all(r"[()]", "", literal=False)
     mask_trail = s.str.ends_with("-")
     s = s.str.replace(r"-$", "", literal=False)
 
@@ -151,6 +152,7 @@ def process_file_to_artifacts(
     *,
     sample_rows_for_llm: int = 50,
     metric_rename_heuristic: bool = False,
+    header_row_override: Optional[int] = None,
 ) -> ProcessResult:
     # Decide file kind by extension
     ext = local_path.lower().rsplit(".", 1)[-1]
@@ -163,8 +165,34 @@ def process_file_to_artifacts(
         df_pl = _pl_read_csv(local_path)
         rows_before = df_pl.height
         work = _drop_fully_blank_rows_pl(df_pl)
-        hdr_row = _detect_header_row_pl(work)
-        headers = _build_headers([str(x) for x in work.row(hdr_row)])
+        # Lazy import header helpers (package/script modes)
+        try:
+            from .header_utils import (
+                detect_header_row_simple,
+                finalize_headers,
+                build_analysis_hints,
+                is_numeric_string,
+            )  # type: ignore
+        except Exception:  # pragma: no cover
+            from header_utils import (
+                detect_header_row_simple,
+                finalize_headers,
+                build_analysis_hints,
+                is_numeric_string,
+            )  # type: ignore
+
+        if header_row_override is not None:
+            hdr_row = int(header_row_override)
+            header_confidence = 1.0
+            method = "override"
+        else:
+            lookahead = int(os.getenv("PREPROCESS_HEADER_LOOKAHEAD", "12"))
+            pdf = work.head(lookahead).to_pandas()
+            hdr_row, header_confidence = detect_header_row_simple(pdf, lookahead=lookahead)
+            method = "auto_detected"
+
+        raw_headers = [str(x) for x in work.row(hdr_row)] if work.height > hdr_row else [None] * work.width
+        headers, header_issues = finalize_headers(raw_headers)
         body = work.slice(hdr_row + 1)
         # Rename first N columns to headers
         rename_map = {old: headers[i] for i, old in enumerate(body.columns[: len(headers)])}
@@ -236,6 +264,25 @@ def process_file_to_artifacts(
                     obj[str(k)] = v if (v is None or isinstance(v, (str, int, float, bool))) else str(v)
             sample_rows.append(obj)
 
+        # Build v2 analysis hints and dataset summary
+        hints, dataset_summary = build_analysis_hints(df, headers, hdr_row, float(header_confidence))
+        # Minimal header_info with transposed signal
+        is_transposed = False
+        non_empty_final = [h for h in headers if str(h).strip() != ""]
+        if non_empty_final:
+            is_transposed = all(is_numeric_string(h) for h in non_empty_final)
+
+        header_info = {
+            "method": method,
+            "header_row_index": int(hdr_row),
+            "confidence": float(header_confidence),
+            "original_headers": [str(x) if x is not None else None for x in raw_headers],
+            "final_headers": headers,
+            "is_transposed": bool(is_transposed),
+        }
+        if header_issues:
+            header_info["issues"] = header_issues
+
         payload: Dict[str, Any] = {
             "dataset": dataset_meta,
             "columns": columns_meta,
@@ -250,6 +297,11 @@ def process_file_to_artifacts(
             },
             "mode": "full",
             "version": "1",
+            # v2 additive fields
+            "schema_version": "2.0",
+            "header_info": header_info,
+            "analysis_hints": hints,
+            "dataset_summary": dataset_summary,
         }
 
         return ProcessResult(
@@ -267,6 +319,7 @@ def process_bytes_to_artifacts(
     *,
     sample_rows_for_llm: int = 50,
     metric_rename_heuristic: bool = False,
+    header_row_override: Optional[int] = None,
 ) -> ProcessResult:
     if kind not in ("csv", "excel"):
         raise ValueError("kind must be 'csv' or 'excel'")
@@ -280,15 +333,41 @@ def process_bytes_to_artifacts(
             from .pipeline_adapter import process_df_to_artifacts as _p  # type: ignore
         except Exception:
             from pipeline_adapter import process_df_to_artifacts as _p  # type: ignore
-        return _p(raw_df, "excel", sample_rows_for_llm=sample_rows_for_llm, metric_rename_heuristic=metric_rename_heuristic)
+        return _p(raw_df, "excel", sample_rows_for_llm=sample_rows_for_llm, metric_rename_heuristic=metric_rename_heuristic, header_row_override=header_row_override)
     else:
         # CSV via Polars (same as file path case)
         tmp_path = io.BytesIO(data)
         df_pl = _pl_read_csv(tmp_path)
         rows_before = df_pl.height
         work = _drop_fully_blank_rows_pl(df_pl)
-        hdr_row = _detect_header_row_pl(work)
-        headers = _build_headers([str(x) for x in work.row(hdr_row)])
+        # Lazy import header helpers
+        try:
+            from .header_utils import (
+                detect_header_row_simple,
+                finalize_headers,
+                build_analysis_hints,
+                is_numeric_string,
+            )  # type: ignore
+        except Exception:  # pragma: no cover
+            from header_utils import (
+                detect_header_row_simple,
+                finalize_headers,
+                build_analysis_hints,
+                is_numeric_string,
+            )  # type: ignore
+
+        if header_row_override is not None:
+            hdr_row = int(header_row_override)
+            header_confidence = 1.0
+            method = "override"
+        else:
+            lookahead = int(os.getenv("PREPROCESS_HEADER_LOOKAHEAD", "12"))
+            pdf = work.head(lookahead).to_pandas()
+            hdr_row, header_confidence = detect_header_row_simple(pdf, lookahead=lookahead)
+            method = "auto_detected"
+
+        raw_headers = [str(x) for x in work.row(hdr_row)] if work.height > hdr_row else [None] * work.width
+        headers, header_issues = finalize_headers(raw_headers)
         body = work.slice(hdr_row + 1)
         rename_map = {old: headers[i] for i, old in enumerate(body.columns[: len(headers)])}
         body = body.rename(rename_map)
@@ -354,6 +433,25 @@ def process_bytes_to_artifacts(
                     obj[str(k)] = v if (v is None or isinstance(v, (str, int, float, bool))) else str(v)
             sample_rows.append(obj)
 
+        # Build v2 analysis hints and dataset summary
+        hints, dataset_summary = build_analysis_hints(df, headers, hdr_row, float(header_confidence))
+        # Minimal header_info with transposed signal
+        is_transposed = False
+        non_empty_final = [h for h in headers if str(h).strip() != ""]
+        if non_empty_final:
+            is_transposed = all(is_numeric_string(h) for h in non_empty_final)
+
+        header_info = {
+            "method": method,
+            "header_row_index": int(hdr_row),
+            "confidence": float(header_confidence),
+            "original_headers": [str(x) if x is not None else None for x in raw_headers],
+            "final_headers": headers,
+            "is_transposed": bool(is_transposed),
+        }
+        if header_issues:
+            header_info["issues"] = header_issues
+
         payload: Dict[str, Any] = {
             "dataset": dataset_meta,
             "columns": columns_meta,
@@ -368,6 +466,11 @@ def process_bytes_to_artifacts(
             },
             "mode": "full",
             "version": "1",
+            # v2 additive fields
+            "schema_version": "2.0",
+            "header_info": header_info,
+            "analysis_hints": hints,
+            "dataset_summary": dataset_summary,
         }
 
         return ProcessResult(

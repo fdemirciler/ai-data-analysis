@@ -25,35 +25,35 @@ def _ensure_model():
 
 
 def generate_analysis_code(question: str, schema_snippet: str, sample_rows: list[dict], row_limit: int = 200) -> str:
-    """Ask Gemini to produce Python code implementing def run(df, ctx): -> RESULT."""
+    """Ask Gemini to produce Python code implementing def run(df, ctx): -> RESULT.
+
+    Strict mode: the response MUST contain a single fenced Python block with a valid
+    `def run(df, ctx):` implementation. If not present, we raise to let the caller
+    fail fast (no generic preview fallback).
+    """
     model = _ensure_model()
     sample_preview = sample_rows[: min(len(sample_rows), 10)]
     
-    # --- PROMPT ENHANCEMENT ---
-    # This prompt is now much more specific to prevent syntax errors and improve formatting.
+    # Strict prompt: produce exactly one fenced python code block (no narration).
     prompt = (
-        "You are an expert Python data analyst. Your task is to write a single, syntactically correct Python function `run(df, ctx)` "
-        "that performs a data analysis based on the user's question. "
-        "You will be given the schema and sample rows of a pandas DataFrame `df`.\n\n"
-        "RULES:\n"
-        "1. Your ENTIRE output must be a single Python code block starting with ```python and ending with ```.\n"
-        "2. DO NOT include any text, explanations, or markdown before or after the code block.\n"
-        "3. The function signature MUST be `def run(df, ctx):`.\n"
-        "4. The function MUST return a dictionary with keys: 'table' (list of dicts), 'metrics' (dict), and 'chartData' (dict).\n"
-        "5. Round all floating-point numbers in the output to a maximum of 3 decimal places.\n"
-        "6. Handle division by zero or invalid calculations gracefully. The final JSON output cannot contain NaN, Infinity, or -Infinity. Replace these with None.\n"
-        "7. Allowed imports are: pandas as pd, numpy as np, math, json.\n"
-        "8. Only generate a chart if the user's question explicitly asks for a 'chart', 'plot', 'graph', or 'visualization'. Otherwise, return an empty dictionary for 'chartData', like so: {'kind': 'bar', 'labels': [], 'series': []}.\n\n"
+        "You are an expert Python data analyst. Write a single function to answer the user's question.\n\n"
+        "OUTPUT REQUIREMENTS (STRICT):\n"
+        "- Return ONLY one fenced Python code block starting with ```python and ending with ``` (no extra text).\n"
+        "- The block must define: def run(df, ctx): -> dict\n"
+        "- The returned dict MUST have keys: 'table' (list[dict]), 'metrics' (dict), 'chartData' (dict).\n"
+        "- If required columns are missing, return {'error': 'missing column X'} with empty table/metrics/chartData.\n"
+        "- Round floats to <=3 decimals and avoid NaN/Inf (use None).\n"
+        "- Allowed imports: pandas as pd, numpy as np, math, json.\n"
+        "- Only produce a chart if the question explicitly asks (chart/plot/graph/visualization); otherwise chartData should be empty (e.g., {'kind':'bar','labels':[],'series':[]}).\n\n"
         f"SCHEMA:\n{schema_snippet}\n\n"
         f"SAMPLE ROWS:\n{sample_preview}\n\n"
         f"USER QUESTION: \"{question}\"\n\n"
-        "CODE:"
+        "Return the code block now:"
     )
-    # --- END PROMPT ENHANCEMENT ---
 
     resp = model.generate_content(
         prompt,
-        generation_config={"max_output_tokens": 512, "temperature": 0.2},
+        generation_config={"max_output_tokens": 2048, "temperature": 0.0},
     )
     text = ""
     # Be robust to safety blocks / empty candidates
@@ -86,38 +86,16 @@ def generate_analysis_code(question: str, schema_snippet: str, sample_rows: list
         text = ""
 
     code = _extract_code_block(text)
-    if not code:
-        # Safe fallback: generic preview code
-        code = (
-            "import pandas as pd\n"
-            "import numpy as np\n"
-            "import math\n"
-            "def run(df, ctx):\n"
-            "    try:\n"
-            "        row_limit = int(ctx.get('row_limit', 200))\n"
-            "    except Exception:\n"
-            "        row_limit = 200\n"
-            "    table = df.head(row_limit).to_dict(orient='records')\n"
-            "    metrics = {'rows': int(len(df))}\n"
-            "    chart = {'kind': 'bar', 'labels': [], 'series': [{'label': 'Count', 'data': []}]}\n"
-            "    obj_cols = [c for c in df.columns if df[c].dtype == 'object']\n"
-            "    if obj_cols:\n"
-            "        vc = df[obj_cols[0]].astype('string').value_counts().head(5)\n"
-            "        chart['labels'] = [str(x) for x in vc.index.tolist()]\n"
-            "        chart['series'][0]['data'] = [int(x) for x in vc.values.tolist()]\n"
-            "    else:\n"
-            "        num_cols = df.select_dtypes(include=['number']).columns.tolist()\n"
-            "        if num_cols:\n"
-            "            s = df[num_cols[0]].dropna().head(5)\n"
-            "            chart['labels'] = [str(i) for i in range(len(s))]\n"
-            "            chart['series'][0]['data'] = [float(x) for x in s.tolist()]\n"
-            "    return {'table': table, 'metrics': metrics, 'chartData': chart}\n"
-        )
+    if not code or "def run(" not in code:
+        raise RuntimeError("MISSING_CODE_BLOCK")
     return code
 
 
-def generate_summary(question: str, table_head: list[dict], metrics: dict) -> str:
-    """Generates a data-driven summary by interpreting the analysis results."""
+def generate_summary(question: str, table_head: list[dict], metrics: dict, code: str | None = None) -> str:
+    """Generates a data-driven summary by interpreting the analysis results.
+
+    Includes the generated code (if available) to improve relevance.
+    """
     model = _ensure_model()
     preview = table_head[: min(len(table_head), 5)]
     
@@ -130,7 +108,8 @@ def generate_summary(question: str, table_head: list[dict], metrics: dict) -> st
         f"USER'S ORIGINAL QUESTION: \"{question}\"\n\n"
         f"ANALYSIS RESULTS - TABLE SAMPLE:\n{preview}\n\n"
         f"ANALYSIS RESULTS - KEY METRICS:\n{metrics}\n\n"
-        "YOUR INTERPRETATION:"
+        + (f"GENERATED CODE (for context):\n```python\n{(code or '')[:800]}\n```\n\n" if code else "")
+        + "YOUR INTERPRETATION:"
     )
     # --- END PROMPT ENHANCEMENT ---
 
@@ -168,26 +147,24 @@ def generate_code_and_summary(question: str, schema_snippet: str, sample_rows: l
     model = _ensure_model()
     sample_preview = sample_rows[: min(len(sample_rows), 10)]
     
-    # This prompt is stricter about the output format and includes formatting rules.
+    # Strict two-block format: code and a result schema example. No narration outside blocks.
     prompt = (
-        "You are an expert Python data analyst. Produce both the code and a short summary in a structured output.\n\n"
+        "You are an expert Python data analyst. Produce code in a strict two-block format.\n\n"
         "RULES FOR THE CODE BLOCK:\n"
         "1. The function signature MUST be `def run(df, ctx):`.\n"
         "2. The function MUST return a dictionary with keys: 'table', 'metrics', and 'chartData'.\n"
-        "3. Round all floating-point numbers in the output to a maximum of 3 decimal places.\n"
-        "4. Handle division by zero or invalid calculations gracefully. The final JSON output cannot contain NaN, Infinity, or -Infinity. Replace these with None.\n"
-        "5. Allowed imports are: pandas as pd, numpy as np, math, json.\n"
-        "6. Only generate a chart if the user's question explicitly asks for a 'chart', 'plot', 'graph', or 'visualization'. Otherwise, return an empty dictionary for 'chartData', like so: {'kind': 'bar', 'labels': [], 'series': []}.\n\n"
-        "RULES FOR THE SUMMARY (This is a pre-analysis plan):\n"
-        "1. Provide a one-paragraph summary of the analysis that the code will perform.\n\n"
+        "3. Round floats to <=3 decimals; avoid NaN/Inf by using None.\n"
+        "4. Allowed imports: pandas as pd, numpy as np, math, json.\n"
+        "5. Only generate a chart if the user's question explicitly asks; otherwise return empty chartData.\n\n"
         "OUTPUT FORMAT (MUST BE EXACTLY THIS):\n"
         "[CODE_START]\n"
         "```python\n"
-        "# your python code here\n"
+        "# only the def run(df, ctx): implementation here\n"
         "```\n"
-        "[CODE_END][SUMMARY_START]\n"
-        "Your short plan summary here.\n"
-        "[SUMMARY_END]\n\n"
+        "[CODE_END]\n"
+        "[RESULT_SCHEMA_START]\n"
+        "{\n  \"table\": [{\"...\": \"...\"}], \n  \"metrics\": {\"...\": 0}, \n  \"chartData\": {\"kind\": \"bar\", \"labels\": [], \"series\": []}\n}\n"
+        "[RESULT_SCHEMA_END]\n\n"
         "--- START OF DATA ---\n"
         f"Schema:\n{schema_snippet}\n\n"
         f"Sample rows:\n{sample_preview}\n\n"
@@ -196,7 +173,7 @@ def generate_code_and_summary(question: str, schema_snippet: str, sample_rows: l
     
     resp = model.generate_content(
         prompt,
-        generation_config={"max_output_tokens": 768, "temperature": 0.2},
+        generation_config={"max_output_tokens": 2048, "temperature": 0.0},
     )
     text = ""
     try:
@@ -204,32 +181,22 @@ def generate_code_and_summary(question: str, schema_snippet: str, sample_rows: l
     except Exception:
         text = ""
 
-    # Parse structured markers first
+    # Parse structured markers first (fail fast if missing)
     code = ""
-    summary = ""
     try:
         m_code_block = re.search(r"\[CODE_START\](.*?)\[CODE_END\]", text, flags=re.DOTALL | re.IGNORECASE)
-        if m_code_block:
-            code_section = m_code_block.group(1)
-            code = _extract_code_block(code_section)
-        else:
-            code = _extract_code_block(text)
+        m_result = re.search(r"\[RESULT_SCHEMA_START\](.*?)\[RESULT_SCHEMA_END\]", text, flags=re.DOTALL | re.IGNORECASE)
+        if not m_code_block or not m_result:
+            raise RuntimeError("MISSING_REQUIRED_BLOCKS")
+        code_section = m_code_block.group(1)
+        code = _extract_code_block(code_section)
+        if not code or "def run(" not in code:
+            raise RuntimeError("MISSING_CODE_BLOCK")
+    except Exception as e:
+        # Propagate to orchestrator to emit CODEGEN_FAILED
+        raise
 
-        m_sum = re.search(r"\[SUMMARY_START\](.*?)\[SUMMARY_END\]", text, flags=re.DOTALL | re.IGNORECASE)
-        if m_sum:
-            summary = m_sum.group(1).strip()
-        else:
-            summary = (text.strip().split("\n\n")[-1] or "").strip()
-    except Exception:
-        # Fallback to two-call path if parsing failed badly
-        code = _extract_code_block(text)
-        if not code:
-            code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
-        summary = "Analysis planned. Executed results will follow."
-
-    if not code:
-        code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
-    if not summary:
-        summary = "Analysis planned. Executed results will follow."
+    # We don't need a pre-summary; provide a small placeholder.
+    summary = "Analysis planned. Executed results will follow."
     return code, summary
 

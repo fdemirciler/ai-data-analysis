@@ -1,6 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "payload",
+  "$comment": "This schema validates the v1 payload (dataset, columns, sample_rows, cleaning_report, mode, version). Additional v2 fields are additive and may be present but are not validated here: schema_version, header_info, analysis_hints, dataset_summary.",
   "type": "object",
   "required": ["dataset", "columns", "mode", "version"],
   "properties": {

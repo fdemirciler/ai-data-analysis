@@ -226,12 +226,34 @@ async def handle_eventarc(request: Request) -> Response:
         kind = "excel" if is_xlsx else "csv"
         t_download = time.monotonic()
 
-        # 2) Run pipeline adapter (bytes variant; lazy import on first use)
+        # 2) Optional manual header-row override from GCS metadata (preferred) or env fallback
+        header_row_override = None
+        try:
+            prefix = f"users/{uid}/sessions/{sid}/datasets/{dataset_id}"
+            override_blob = storage_client.bucket(bucket).blob(f"{prefix}/metadata/preprocess_overrides.json")
+            if override_blob.exists(storage_client):
+                override_obj = json.loads(override_blob.download_as_text())
+                val = override_obj.get("header_row_index")
+                if isinstance(val, int):
+                    header_row_override = val
+        except Exception as e:
+            logging.warning("override_read_failed: %s", e)
+
+        if header_row_override is None:
+            try:
+                env_val = os.getenv("PREPROCESS_HEADER_ROW_OVERRIDE")
+                if env_val is not None and str(env_val).strip() != "":
+                    header_row_override = int(str(env_val).strip())
+            except Exception:
+                pass
+
+        # 3) Run pipeline adapter (bytes variant; lazy import on first use)
         result = get_process_bytes_to_artifacts()( 
             raw_bytes,
             kind,
             sample_rows_for_llm=50,
             metric_rename_heuristic=False,
+            header_row_override=header_row_override,
         )
         t_process = time.monotonic()
 
@@ -291,21 +313,43 @@ async def handle_eventarc(request: Request) -> Response:
         )
         t_firestore = time.monotonic()
 
-        logging.info(
-            json.dumps(
-                {
-                    "event": "preprocess_complete",
-                    "uid": uid,
-                    "sid": sid,
-                    "datasetId": dataset_id,
-                    "rows": result.rows,
-                    "columns": result.columns,
-                    "cleanedUri": cleaned_uri,
-                    "payloadUri": payload_uri,
-                    "reportUri": report_uri,
-                }
-            )
-        )
+        logging.info(json.dumps({
+            "event": "preprocess_complete",
+            "uid": uid,
+            "sid": sid,
+            "datasetId": dataset_id,
+            "rows": result.rows,
+            "columns": result.columns,
+            "cleanedUri": cleaned_uri,
+            "payloadUri": payload_uri,
+            "reportUri": report_uri,
+        }))
+
+        # header detection telemetry (v2 fields are additive; guard if missing)
+        try:
+            header_info = (result.payload or {}).get("header_info", {})
+            conf = float(header_info.get("confidence") or 0.0)
+            method = header_info.get("method") or "unknown"
+            hrow = int(header_info.get("header_row_index") or -1)
+            is_transposed = bool(header_info.get("is_transposed") or False)
+            lookahead = int(os.getenv("PREPROCESS_HEADER_LOOKAHEAD", "12"))
+            low_thr = float(os.getenv("HEADER_LOW_CONFIDENCE_THRESHOLD", "0.4"))
+            low_conf = conf < low_thr
+            logging.info(json.dumps({
+                "event": "header_detection",
+                "uid": uid,
+                "sid": sid,
+                "datasetId": dataset_id,
+                "engine": _get_engine(),
+                "header_row_index": hrow,
+                "confidence": round(conf, 3),
+                "method": method,
+                "is_transposed": is_transposed,
+                "lookahead": lookahead,
+                "low_confidence": low_conf,
+            }))
+        except Exception as e:
+            logging.warning("header_detection_log_failed: %s", e)
         # timings
         timings = {
             "event": "preprocess_timings",

@@ -1,11 +1,23 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.0
 gunicorn==22.0.0
-pandas==2.2.2
-numpy==2.0.2
-pyarrow==16.1.0
+
+# Pandas/Numpy/Arrow/Polars: keep pinned versions for Python <3.13 (deployment parity)
+# and allow newer versions for Python >=3.13 (local dev on latest Python)
+pandas==2.2.2; python_version < "3.13"
+pandas>=2.2.3,<3; python_version >= "3.13"
+
+numpy==2.0.2; python_version < "3.13"
+numpy>=2.1.0,<3; python_version >= "3.13"
+
+pyarrow==16.1.0; python_version < "3.13"
+pyarrow>=16.1.0,<19; python_version >= "3.13"
+
 openpyxl==3.1.5
-polars[xlsx]==1.7.1
+
+polars[xlsx]==1.7.1; python_version < "3.13"
+polars[xlsx]>=1.7.1,<2; python_version >= "3.13"
+
 google-cloud-storage==2.16.0
 google-cloud-firestore==2.16.0
 google-cloud-logging==3.10.0

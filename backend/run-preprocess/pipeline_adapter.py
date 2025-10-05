@@ -28,6 +28,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import os
+try:
+    from .header_utils import (
+        detect_header_row_simple,
+        finalize_headers,
+        build_analysis_hints,
+        is_numeric_string,
+    )  # type: ignore
+except Exception:  # pragma: no cover
+    from header_utils import (
+        detect_header_row_simple,
+        finalize_headers,
+        build_analysis_hints,
+        is_numeric_string,
+    )  # type: ignore
 
 # -----------------------------
 # Constants & helpers
@@ -258,6 +273,7 @@ def process_file_to_artifacts(
     *,
     sample_rows_for_llm: int = 50,
     metric_rename_heuristic: bool = False,  # kept for compatibility; not used (non-destructive)
+    header_row_override: Optional[int] = None,
 ) -> ProcessResult:
     raw_df, file_kind = _load_raw(local_path)
     return process_df_to_artifacts(
@@ -265,6 +281,7 @@ def process_file_to_artifacts(
         file_kind,
         sample_rows_for_llm=sample_rows_for_llm,
         metric_rename_heuristic=metric_rename_heuristic,
+        header_row_override=header_row_override,
     )
 
 
@@ -274,6 +291,7 @@ def process_bytes_to_artifacts(
     *,
     sample_rows_for_llm: int = 50,
     metric_rename_heuristic: bool = False,
+    header_row_override: Optional[int] = None,
 ) -> ProcessResult:
     """In-memory variant of process_file_to_artifacts.
 
@@ -302,6 +320,7 @@ def process_bytes_to_artifacts(
         file_kind,
         sample_rows_for_llm=sample_rows_for_llm,
         metric_rename_heuristic=metric_rename_heuristic,
+        header_row_override=header_row_override,
     )
 
 
@@ -311,12 +330,24 @@ def process_df_to_artifacts(
     *,
     sample_rows_for_llm: int = 50,
     metric_rename_heuristic: bool = False,
+    header_row_override: Optional[int] = None,
 ) -> ProcessResult:
     rows_before = raw_df.shape[0]
 
     work = _drop_fully_blank_rows(raw_df).reset_index(drop=True)
-    header_row = _detect_header_row(work)
-    headers, start_row = _build_headers(work, header_row)
+    # Determine header row (override or auto-detect)
+    if header_row_override is not None:
+        header_row = int(header_row_override)
+        header_confidence = 1.0
+        method = "override"
+    else:
+        lookahead = int(os.getenv("PREPROCESS_HEADER_LOOKAHEAD", "12"))
+        header_row, header_confidence = detect_header_row_simple(work, lookahead=lookahead)
+        method = "auto_detected"
+
+    raw_headers = work.iloc[header_row].tolist() if len(work) > header_row else [None] * work.shape[1]
+    headers, header_issues = finalize_headers(raw_headers)
+    start_row = header_row + 1
 
     body = work.iloc[start_row:].reset_index(drop=True)
     body.columns = headers
@@ -398,6 +429,25 @@ def process_df_to_artifacts(
                 obj[k] = v if (v is None or isinstance(v, (str, int, float, bool))) else str(v)
         sample_rows.append(obj)
 
+    # Build v2 analysis hints and dataset summary
+    hints, dataset_summary = build_analysis_hints(df, headers, header_row, float(header_confidence))
+    # Minimal header_info with transposed signal
+    is_transposed = False
+    non_empty_final = [h for h in headers if str(h).strip() != ""]
+    if non_empty_final:
+        is_transposed = all(is_numeric_string(h) for h in non_empty_final)
+
+    header_info = {
+        "method": method,
+        "header_row_index": int(header_row),
+        "confidence": float(header_confidence),
+        "original_headers": [str(x).strip() if x is not None else None for x in raw_headers],
+        "final_headers": headers,
+        "is_transposed": bool(is_transposed),
+    }
+    if header_issues:
+        header_info["issues"] = header_issues
+
     payload: Dict[str, Any] = {
         "dataset": dataset_meta,
         "columns": columns_meta,
@@ -412,6 +462,11 @@ def process_df_to_artifacts(
         },
         "mode": "full",
         "version": "1",
+        # v2 additive fields (compact)
+        "schema_version": "2.0",
+        "header_info": header_info,
+        "analysis_hints": hints,
+        "dataset_summary": dataset_summary,
     }
 
     if file_kind == "excel":

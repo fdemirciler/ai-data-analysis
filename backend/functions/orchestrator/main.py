@@ -161,16 +161,75 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     # Load schema/sample from payload.json if present (preferred)
     schema_snippet = ""
     sample_rows: list[dict] = []
+    ctx: dict = {"limits": {"sampleRowsForDisplay": 50, "maxCharts": 0}}
     try:
         if isinstance(payload_obj, dict):
             # Our payload emits: columns (dict), dataset meta, and sample_rows (list)
             cols = payload_obj.get("columns")
-            if isinstance(cols, (list, dict)):
-                # Truncate to a compact snippet for prompt
-                schema_snippet = json.dumps(cols)[:500]
+            header_info = payload_obj.get("header_info") or {}
+            hints = payload_obj.get("analysis_hints") or {}
+            dataset_summary = payload_obj.get("dataset_summary") or ""
+
+            # Build compact context lines if v2 present
+            context_lines: list[str] = []
+            if header_info or hints or dataset_summary:
+                hrow = header_info.get("header_row_index")
+                conf = header_info.get("confidence")
+                method = header_info.get("method")
+                final_headers = header_info.get("final_headers") or []
+                hdr_preview = final_headers[:4] if isinstance(final_headers, list) else []
+                first_col_type = hints.get("first_column_type")
+                likely_pivoted = hints.get("likely_pivoted")
+                context_lines.append("Dataset context:")
+                parts = []
+                if hrow is not None and conf is not None:
+                    parts.append(f"- Detected header row: {hrow} (confidence {float(conf):.2f}{', ' + method if method else ''})")
+                if hdr_preview:
+                    parts.append(f"- Headers: {hdr_preview}")
+                if first_col_type is not None or likely_pivoted is not None:
+                    parts.append(f"- Likely structure: first column = {first_col_type}, likely_pivoted={bool(likely_pivoted)}")
+                if dataset_summary:
+                    parts.append(f"- Summary: {dataset_summary}")
+                context_lines.extend(parts)
+
+            # Columns preview (limit 3–4 entries for readability)
+            cols_preview_json = ""
+            if isinstance(cols, dict):
+                # take first 4 items
+                items = list(cols.items())[:4]
+                cols_preview_json = json.dumps({k: v for k, v in items})
+            elif isinstance(cols, list):
+                cols_preview_json = json.dumps(cols[:4])
+
+            # Assemble schema_snippet
+            if context_lines or cols_preview_json:
+                schema_snippet = ("\n".join(context_lines) + ("\n" if context_lines else "") + (cols_preview_json or ""))[:1000]
+
             sr = payload_obj.get("sample_rows")
             if isinstance(sr, list):
                 sample_rows = sr[:10]
+
+            # Build ctx from payload
+            dataset_meta = payload_obj.get("dataset") or {}
+            final_headers = header_info.get("final_headers") or []
+            dtypes = dataset_meta.get("dtypes") or {}
+            ctx["dataset"] = {
+                "rows": int(dataset_meta.get("rows") or 0),
+                "columns": int(dataset_meta.get("columns") or 0),
+                "column_names": final_headers if isinstance(final_headers, list) and final_headers else list(dtypes.keys()),
+                "dtypes": dtypes if isinstance(dtypes, dict) else {},
+            }
+            # Map numeric/temporal indices to names if possible
+            def _map_indices(indices: list[int]) -> list[str]:
+                try:
+                    if isinstance(indices, list) and final_headers:
+                        return [str(final_headers[i]) for i in indices if 0 <= i < len(final_headers)]
+                except Exception:
+                    return []
+                return []
+            numeric_names = _map_indices(hints.get("numeric_columns") or [])
+            temporal_names = _map_indices(hints.get("temporal_columns") or [])
+            ctx["hints"] = {"numeric": numeric_names, "temporal": temporal_names}
     except Exception:
         sample_rows = []
 
@@ -290,6 +349,12 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     yield _sse_format({"type": "running_fast"})
     worker_path = os.path.join(os.path.dirname(__file__), "worker.py")
     try:
+        # Attach question into ctx for worker-side heuristics
+        try:
+            ctx["question"] = question
+        except Exception:
+            pass
+
         proc = subprocess.run(
             [os.environ.get("PYTHON_EXECUTABLE", sys.executable), worker_path],
             input=json.dumps({
@@ -297,7 +362,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 "parquet_b64": parquet_b64,
                 "arrow_ipc_b64": arrow_ipc_b64,
                 "parquet_path": parquet_path,
-                "ctx": {"row_limit": 200},
+                "ctx": ctx,
             }).encode("utf-8"),
             capture_output=True,
             timeout=HARD_TIMEOUT_SECONDS,
@@ -335,7 +400,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     # summarizing (generate summary from actual results)
     yield _sse_format({"type": "summarizing"})
     try:
-        summary = gemini_client.generate_summary(question, table_sample, metrics)
+        summary = gemini_client.generate_summary(question, table_sample, metrics, code=code)
     except Exception as e:
         print(f"WARNING: Summary generation failed: {e}", file=sys.stderr)
         # Fallback to the pre-run summary if post-run generation fails

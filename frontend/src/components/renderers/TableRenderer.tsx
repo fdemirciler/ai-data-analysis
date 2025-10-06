@@ -54,8 +54,8 @@ export function TableRenderer({ rows }: { rows: any[] }) {
   }
 
   return (
-    <div className="w-full max-h-[420px] overflow-x-auto overflow-y-auto border rounded-xl">
-      <table className="min-w-full text-sm">
+    <div className="relative w-full max-w-full max-h-[420px] overflow-auto border rounded-xl">
+      <table className="min-w-max text-sm">
         <thead className="bg-muted/40 sticky top-0 z-10">
           <tr>
             {cols.map((c) => {

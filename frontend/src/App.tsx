@@ -208,7 +208,7 @@ export default function App() {
       });
       await putToSignedUrl(resp.url, file);
 
-      // Update conversation with datasetId and add system message (with file name & size)
+      // Update conversation with datasetId and add system message (meta shows file name & size)
       setConversations((prev) =>
         prev.map((c) =>
           c.id === convId
@@ -221,7 +221,8 @@ export default function App() {
                     id: `${convId}-${Date.now()}-sys`,
                     role: "assistant",
                     kind: "text",
-                    content: `File uploaded: ${file.name} (${formatBytes(file.size)}). Preprocessing queued. You can now ask a question about your data.`,
+                    content: "File uploaded and queued for preprocessing. You can now ask a question about your data.",
+                    meta: { fileName: file.name, fileSize: formatBytes(file.size) },
                     timestamp: new Date(),
                   } as Message,
                 ],
@@ -236,30 +237,40 @@ export default function App() {
           // Clean up any prior sub for this conversation
           datasetMetaSubsRef.current[convId]?.();
         } catch {}
+        // Capture the id of the upload system message we just added (last message of the conversation)
+        const uploadMsgId = (() => {
+          const convNow = conversations.find((cc) => cc.id === convId);
+          const arr = convNow ? convNow.messages : [];
+          const last = arr && arr.length > 0 ? arr[arr.length - 1] : null;
+          return last?.id || null;
+        })();
+
         const unsub = subscribeDatasetMeta(user.uid, convId, resp.datasetId, (meta) => {
           const r = typeof meta?.rows === "number" ? meta.rows : undefined;
           const c = typeof meta?.columns === "number" ? meta.columns : undefined;
           if (r && c) {
             setConversations((prev) =>
-              prev.map((sess) =>
-                sess.id === convId
-                  ? {
-                      ...sess,
-                      messages: [
-                        ...sess.messages,
-                        {
-                          id: `${convId}-${Date.now()}-meta`,
-                          role: "assistant",
-                          kind: "text",
-                          content: `Preprocessing complete: ${r.toLocaleString()} rows × ${c.toLocaleString()} columns.`,
-                          timestamp: new Date(),
-                        } as Message,
-                      ],
-                    }
-                  : sess
-              )
+              prev.map((sess) => {
+                if (sess.id !== convId) return sess;
+                const msgs = sess.messages.slice();
+                // Prefer updating the upload system message meta; fallback: update the most recent assistant text message
+                let idx = uploadMsgId ? msgs.findIndex((m) => m.id === uploadMsgId) : -1;
+                if (idx === -1) {
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    const m = msgs[i];
+                    if (m.role === "assistant" && m.kind === "text") { idx = i; break; }
+                  }
+                }
+                if (idx >= 0) {
+                  const m = msgs[idx] as Message;
+                  msgs[idx] = {
+                    ...(m as any),
+                    meta: { ...(m as any).meta, rows: r, columns: c },
+                  } as Message;
+                }
+                return { ...sess, messages: msgs };
+              })
             );
-            // Done; unsubscribe
             try { unsub(); } catch {}
             delete datasetMetaSubsRef.current[convId];
           }

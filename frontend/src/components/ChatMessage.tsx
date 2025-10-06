@@ -12,6 +12,12 @@ export type Message =
       timestamp: Date;
       kind: "text";
       content: string;
+      meta?: {
+        fileName?: string;
+        fileSize?: string; // formatted, e.g., "1.2 MB"
+        rows?: number;
+        columns?: number;
+      };
     }
   | {
       id: string;
@@ -102,9 +108,30 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
               {message.content}
             </div>
           )}
-          {message.kind === "table" && <TableRenderer rows={message.rows} />}
+          {message.kind === "table" && (
+            <div className="max-w-full overflow-auto">
+              <TableRenderer rows={message.rows} />
+            </div>
+          )}
           {message.kind === "chart" && <ChartRenderer chartData={message.chartData} />}
-          <div className="text-xs text-muted-foreground">{timeStr}</div>
+          <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
+            <span>{timeStr}</span>
+            {message.kind === "text" && message.meta?.fileName && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {message.meta.fileName}
+              </span>
+            )}
+            {message.kind === "text" && message.meta?.fileSize && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {message.meta.fileSize}
+              </span>
+            )}
+            {message.kind === "text" && message.meta?.rows !== undefined && message.meta?.columns !== undefined && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {Number(message.meta.rows).toLocaleString()} × {Number(message.meta.columns).toLocaleString()}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

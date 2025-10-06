@@ -333,7 +333,19 @@ export default function App() {
                 )
               );
             }
-            if (chartData && Array.isArray(chartData.labels)) {
+            // Only append chart when it has actual data
+            const hasChartData = (cd: any): boolean => {
+              try {
+                const labels = cd?.labels;
+                const series = cd?.series;
+                if (!Array.isArray(labels) || labels.length === 0) return false;
+                if (!Array.isArray(series) || series.length === 0) return false;
+                return series.some((s: any) => Array.isArray(s?.data) && s.data.some((x: any) => typeof x === "number"));
+              } catch {
+                return false;
+              }
+            };
+            if (chartData && hasChartData(chartData)) {
               setConversations((prev) =>
                 prev.map((c) =>
                   c.id === convId

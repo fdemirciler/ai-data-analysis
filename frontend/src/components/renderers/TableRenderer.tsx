@@ -17,12 +17,12 @@ export function TableRenderer({ rows }: { rows: any[] }) {
   }
 
   return (
-    <div className="w-full overflow-x-auto border rounded-xl">
+    <div className="w-full max-h-[420px] overflow-x-auto overflow-y-auto border rounded-xl">
       <table className="min-w-full text-sm">
-        <thead className="bg-muted/40">
+        <thead className="bg-muted/40 sticky top-0 z-10">
           <tr>
             {cols.map((c) => (
-              <th key={c} className="text-left px-3 py-2 font-medium whitespace-nowrap">
+              <th key={c} className="text-left px-3 py-2 font-medium whitespace-nowrap bg-muted/40">
                 {c}
               </th>
             ))}
@@ -32,7 +32,7 @@ export function TableRenderer({ rows }: { rows: any[] }) {
           {rows.slice(0, 50).map((r, i) => (
             <tr key={i} className="odd:bg-background">
               {cols.map((c) => (
-                <td key={c} className="px-3 py-2 whitespace-nowrap">
+                <td key={c} className="px-3 py-2 whitespace-nowrap max-w-[320px] overflow-hidden text-ellipsis">
                   {String(r?.[c] ?? "")}
                 </td>
               ))}

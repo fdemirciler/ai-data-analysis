@@ -8,6 +8,7 @@ import {
   orderBy,
   limit as qlimit,
   query,
+  onSnapshot,
 } from "firebase/firestore";
 import type { Message } from "../components/ChatMessage";
 
@@ -19,6 +20,20 @@ export async function ensureSession(uid: string, sid: string, title: string) {
     { title, createdAt: now, updatedAt: now },
     { merge: true }
   );
+}
+
+export function subscribeDatasetMeta(
+  uid: string,
+  sid: string,
+  datasetId: string,
+  cb: (meta: { rows?: number; columns?: number }) => void
+): () => void {
+  const ref = doc(collection(db, "users", uid, "sessions", sid, "datasets"), datasetId);
+  const unsub = onSnapshot(ref, (snap) => {
+    const d = (snap.data() as any) || {};
+    cb({ rows: d?.rows, columns: d?.columns });
+  });
+  return unsub;
 }
 
 export async function updateSessionDataset(uid: string, sid: string, datasetId: string) {

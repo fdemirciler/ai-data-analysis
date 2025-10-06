@@ -3,6 +3,7 @@ import { cn } from "./ui/utils";
 import { Bot } from "lucide-react";
 import { TableRenderer } from "./renderers/TableRenderer";
 import { ChartRenderer } from "./renderers/ChartRenderer";
+import { Button } from "./ui/button";
 
 export type Message =
   | {
@@ -48,14 +49,16 @@ export type Message =
 interface ChatMessageProps {
   message: Message;
   userName: string;
+  showCancel?: boolean;
+  onCancel?: () => void;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) => {
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, showCancel, onCancel }) => {
   const isUser = message.role === "user";
   const timeStr = React.useMemo(() => {
     const d = message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp as any);
     try {
-      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
     } catch {
       return "";
     }
@@ -85,6 +88,13 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName }) =
           {message.kind === "status" && (
             <div className="whitespace-pre-wrap break-words text-muted-foreground italic">
               {message.content}
+              {showCancel && (
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={onCancel}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           {message.kind === "error" && (

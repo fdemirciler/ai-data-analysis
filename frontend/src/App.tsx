@@ -6,7 +6,7 @@ import { ChatHeader } from "./components/ChatHeader";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Button } from "./components/ui/button";
 import { useAuth } from "./context/AuthContext";
-import { ensureSession, updateSessionDataset, saveUserMessage, getRecentSessionsWithMessages } from "./services/firestore";
+import { ensureSession, updateSessionDataset, saveUserMessage, getRecentSessionsWithMessages, subscribeDatasetMeta } from "./services/firestore";
 import { getSignedUploadUrl, putToSignedUrl, streamChat, type ChatEvent } from "./services/api";
 
 interface Conversation {
@@ -32,6 +32,16 @@ export default function App() {
   const prevConvIdRef = useRef<string | null>(null);
   const placeholderIdRef = useRef<string | null>(null);
   const didInitRef = useRef<boolean>(false);
+  const datasetMetaSubsRef = useRef<Record<string, () => void>>({});
+
+  const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const val = bytes / Math.pow(k, i);
+    return `${val.toFixed(val >= 100 ? 0 : val >= 10 ? 1 : 2)} ${sizes[i]}`;
+  };
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
@@ -82,6 +92,11 @@ export default function App() {
   };
 
   const handleDeleteConversation = (id: string) => {
+    // Cleanup any dataset meta listener for this conversation
+    try {
+      datasetMetaSubsRef.current[id]?.();
+      delete datasetMetaSubsRef.current[id];
+    } catch {}
     setConversations((prev) => {
       const next = prev.filter((c) => c.id !== id);
       setActiveConversationId((current) => {
@@ -193,7 +208,7 @@ export default function App() {
       });
       await putToSignedUrl(resp.url, file);
 
-      // Update conversation with datasetId and add system message
+      // Update conversation with datasetId and add system message (with file name & size)
       setConversations((prev) =>
         prev.map((c) =>
           c.id === convId
@@ -206,8 +221,7 @@ export default function App() {
                     id: `${convId}-${Date.now()}-sys`,
                     role: "assistant",
                     kind: "text",
-                    content:
-                      "File uploaded and queued for preprocessing. You can now ask a question about your data.",
+                    content: `File uploaded: ${file.name} (${formatBytes(file.size)}). Preprocessing queued. You can now ask a question about your data.`,
                     timestamp: new Date(),
                   } as Message,
                 ],
@@ -217,6 +231,40 @@ export default function App() {
       );
       if (user?.uid) {
         updateSessionDataset(user.uid, convId, resp.datasetId).catch(() => {});
+        // Listen for dataset metadata (rows, columns) and announce when ready
+        try {
+          // Clean up any prior sub for this conversation
+          datasetMetaSubsRef.current[convId]?.();
+        } catch {}
+        const unsub = subscribeDatasetMeta(user.uid, convId, resp.datasetId, (meta) => {
+          const r = typeof meta?.rows === "number" ? meta.rows : undefined;
+          const c = typeof meta?.columns === "number" ? meta.columns : undefined;
+          if (r && c) {
+            setConversations((prev) =>
+              prev.map((sess) =>
+                sess.id === convId
+                  ? {
+                      ...sess,
+                      messages: [
+                        ...sess.messages,
+                        {
+                          id: `${convId}-${Date.now()}-meta`,
+                          role: "assistant",
+                          kind: "text",
+                          content: `Preprocessing complete: ${r.toLocaleString()} rows × ${c.toLocaleString()} columns.`,
+                          timestamp: new Date(),
+                        } as Message,
+                      ],
+                    }
+                  : sess
+              )
+            );
+            // Done; unsubscribe
+            try { unsub(); } catch {}
+            delete datasetMetaSubsRef.current[convId];
+          }
+        });
+        datasetMetaSubsRef.current[convId] = unsub;
       }
     } catch (e: any) {
       alert(e?.message || String(e));
@@ -411,30 +459,16 @@ export default function App() {
                   <ChatMessage
                     message={message}
                     userName="Fatih Demirciler"
+                    showCancel={
+                      isTyping &&
+                      message.role === "assistant" &&
+                      message.kind === "status" &&
+                      message.id === placeholderIdRef.current
+                    }
+                    onCancel={handleCancel}
                   />
                 </React.Fragment>
               ))}
-              {isTyping && (
-                <div className="w-full py-8 px-4">
-                  <div className="max-w-3xl mx-auto flex gap-6">
-                    <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0">
-                      <div className="w-5 h-5">AI</div>
-                    </div>
-                    <div className="flex-1 pt-1">
-                      <div className="flex gap-1">
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                      </div>
-                      <div className="mt-3">
-                        <Button variant="outline" size="sm" onClick={handleCancel}>
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
               {/* Bottom sentinel for smooth scrolling */}
               <div ref={bottomRef} />
             </div>

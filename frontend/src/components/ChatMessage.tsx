@@ -128,7 +128,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
             )}
             {message.kind === "text" && message.meta?.rows !== undefined && message.meta?.columns !== undefined && (
               <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                {Number(message.meta.rows).toLocaleString()} rows X {Number(message.meta.columns).toLocaleString()} columns
+                {Number(message.meta.rows).toLocaleString()} rows x {Number(message.meta.columns).toLocaleString()} columns
               </span>
             )}
           </div>

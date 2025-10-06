@@ -243,6 +243,7 @@ export default function App() {
           datasetMetaSubsRef.current[convId]?.();
         } catch {}
         const unsub = subscribeDatasetMeta(user.uid, convId, resp.datasetId, (meta) => {
+          
           const r = typeof meta?.rows === "number" ? meta.rows : undefined;
           const c = typeof meta?.columns === "number" ? meta.columns : undefined;
           if (r && c) {

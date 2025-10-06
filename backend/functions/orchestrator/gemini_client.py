@@ -113,14 +113,49 @@ def generate_summary(question: str, table_head: list[dict], metrics: dict, code:
     )
     # --- END PROMPT ENHANCEMENT ---
 
-    resp = model.generate_content(prompt, generation_config={"max_output_tokens": 256, "temperature": 0.3})
+    resp = model.generate_content(prompt, generation_config={"max_output_tokens": 2048, "temperature": 0.3})
     text = ""
     try:
-        text = resp.text or ""
+        text = (resp.text or "").strip()
     except Exception:
-        # Fallback when response is blocked/empty
         text = ""
-    return (text or "Analysis complete. See chart and table for details.").strip()
+
+    if text:
+        return text
+
+    # --- Data-driven fallback when the model returns empty/blocked text ---
+    try:
+        rows_val = int(metrics.get("rows")) if isinstance(metrics, dict) and metrics.get("rows") is not None else None
+    except Exception:
+        rows_val = None
+    try:
+        cols_val = int(metrics.get("columns")) if isinstance(metrics, dict) and metrics.get("columns") is not None else None
+    except Exception:
+        cols_val = None
+
+    cols_preview: list[str] = []
+    try:
+        if isinstance(table_head, list) and len(table_head) > 0 and isinstance(table_head[0], dict):
+            cols_preview = list(table_head[0].keys())[:6]
+    except Exception:
+        cols_preview = []
+
+    parts: list[str] = []
+    if question:
+        parts.append(f"Question: {question.strip()}")
+    if rows_val is not None and cols_val is not None:
+        parts.append(f"Dataset shape: {rows_val} rows × {cols_val} columns.")
+    elif rows_val is not None:
+        parts.append(f"Rows: {rows_val}.")
+    elif cols_val is not None:
+        parts.append(f"Columns: {cols_val}.")
+    if cols_preview:
+        parts.append("Columns preview: " + ", ".join(map(str, cols_preview)) + ".")
+
+    fallback = " ".join(parts).strip()
+    if not fallback:
+        fallback = "No textual summary available. See the table for details."
+    return fallback
 
 
 def _extract_code_block(text: str) -> str:

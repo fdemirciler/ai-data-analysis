@@ -33,6 +33,7 @@ export default function App() {
   const placeholderIdRef = useRef<string | null>(null);
   const didInitRef = useRef<boolean>(false);
   const datasetMetaSubsRef = useRef<Record<string, () => void>>({});
+  const uploadMsgIdByConvRef = useRef<Record<string, string | null>>({});
 
   const formatBytes = (bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -208,6 +209,10 @@ export default function App() {
       });
       await putToSignedUrl(resp.url, file);
 
+      // Prepare a stable id for the upload system message so we can update it later with rows×columns
+      const uploadMsgId = `${convId}-${Date.now()}-sys`;
+      uploadMsgIdByConvRef.current[convId] = uploadMsgId;
+
       // Update conversation with datasetId and add system message (meta shows file name & size)
       setConversations((prev) =>
         prev.map((c) =>
@@ -218,7 +223,7 @@ export default function App() {
                 messages: [
                   ...c.messages,
                   {
-                    id: `${convId}-${Date.now()}-sys`,
+                    id: uploadMsgId,
                     role: "assistant",
                     kind: "text",
                     content: "File uploaded and queued for preprocessing. You can now ask a question about your data.",
@@ -237,14 +242,6 @@ export default function App() {
           // Clean up any prior sub for this conversation
           datasetMetaSubsRef.current[convId]?.();
         } catch {}
-        // Capture the id of the upload system message we just added (last message of the conversation)
-        const uploadMsgId = (() => {
-          const convNow = conversations.find((cc) => cc.id === convId);
-          const arr = convNow ? convNow.messages : [];
-          const last = arr && arr.length > 0 ? arr[arr.length - 1] : null;
-          return last?.id || null;
-        })();
-
         const unsub = subscribeDatasetMeta(user.uid, convId, resp.datasetId, (meta) => {
           const r = typeof meta?.rows === "number" ? meta.rows : undefined;
           const c = typeof meta?.columns === "number" ? meta.columns : undefined;
@@ -254,7 +251,8 @@ export default function App() {
                 if (sess.id !== convId) return sess;
                 const msgs = sess.messages.slice();
                 // Prefer updating the upload system message meta; fallback: update the most recent assistant text message
-                let idx = uploadMsgId ? msgs.findIndex((m) => m.id === uploadMsgId) : -1;
+                const targetId = uploadMsgIdByConvRef.current[convId] || null;
+                let idx = targetId ? msgs.findIndex((m) => m.id === targetId) : -1;
                 if (idx === -1) {
                   for (let i = msgs.length - 1; i >= 0; i--) {
                     const m = msgs[i];
@@ -273,6 +271,7 @@ export default function App() {
             );
             try { unsub(); } catch {}
             delete datasetMetaSubsRef.current[convId];
+            uploadMsgIdByConvRef.current[convId] = null;
           }
         });
         datasetMetaSubsRef.current[convId] = unsub;

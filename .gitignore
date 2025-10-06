@@ -47,6 +47,7 @@ venv/
 /frontend/.env
 /frontend/.env.local
 /frontend/.env.development
+/frontend/.env.production
 /backend/env.chat.yaml
 /backend/env.sign-upload-url.yaml
 /backend/env.chat.env

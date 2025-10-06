@@ -109,7 +109,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
             </div>
           )}
           {message.kind === "table" && (
-            <div className="max-w-full overflow-auto">
+            <div className="w-fit max-w-full overflow-auto">
               <TableRenderer rows={message.rows} />
             </div>
           )}
@@ -128,7 +128,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
             )}
             {message.kind === "text" && message.meta?.rows !== undefined && message.meta?.columns !== undefined && (
               <span className="inline-flex items-center rounded-full border px-2 py-0.5">
-                {Number(message.meta.rows).toLocaleString()} × {Number(message.meta.columns).toLocaleString()}
+                {Number(message.meta.rows).toLocaleString()} rows X {Number(message.meta.columns).toLocaleString()} columns
               </span>
             )}
           </div>

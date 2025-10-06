@@ -86,23 +86,33 @@ def _build_fallback_from_df(df: pd.DataFrame, ctx: dict) -> dict:
         row_limit = 200
     table = df.head(row_limit).to_dict(orient="records")
     metrics = {"rows": int(len(df)), "columns": int(len(df.columns))}
-    chart = {"kind": "bar", "labels": [], "series": [{"label": "Count", "data": []}]}
-    # Prefer a categorical distribution; else a numeric preview
+    # Decide whether a fallback chart is allowed and explicitly requested
     try:
-        obj_cols = [c for c in df.columns if df[c].dtype == "object"]
-        if obj_cols:
-            vc = df[obj_cols[0]].astype("string").value_counts().head(5)
-            chart["labels"] = [str(x) for x in vc.index.tolist()]
-            chart["series"][0]["data"] = [int(x) for x in vc.values.tolist()]
-        else:
-            num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-            if num_cols:
-                s = df[num_cols[0]].dropna().head(5)
-                chart["labels"] = [str(i) for i in range(len(s))]
-                chart["series"][0]["data"] = [float(x) for x in s.tolist()]
+        q = str((ctx or {}).get("question") or "").lower()
     except Exception:
-        # Keep minimal chart on failure
-        pass
+        q = ""
+    wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
+    if not wants_chart:
+        # Respect rule: no chart unless explicitly asked
+        chart = {}
+    else:
+        chart = {"kind": "bar", "labels": [], "series": [{"label": "Count", "data": []}]}
+        # Prefer a categorical distribution; else a numeric preview
+        try:
+            obj_cols = [c for c in df.columns if df[c].dtype == "object"]
+            if obj_cols:
+                vc = df[obj_cols[0]].astype("string").value_counts().head(5)
+                chart["labels"] = [str(x) for x in vc.index.tolist()]
+                chart["series"][0]["data"] = [int(x) for x in vc.values.tolist()]
+            else:
+                num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+                if num_cols:
+                    s = df[num_cols[0]].dropna().head(5)
+                    chart["labels"] = [str(i) for i in range(len(s))]
+                    chart["series"][0]["data"] = [float(x) for x in s.tolist()]
+        except Exception:
+            # Keep minimal chart structure on failure
+            pass
     return {"table": table, "metrics": metrics, "chartData": chart}
 
 
@@ -156,10 +166,10 @@ def main() -> int:
         # Coerce common outputs into the expected dict shape
         if not isinstance(result, dict):
             if isinstance(result, pd.DataFrame):
-                result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}}
+                result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {}}
             elif isinstance(result, list):
                 # Assume list of rows
-                result = {"table": result, "metrics": {}, "chartData": {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}}
+                result = {"table": result, "metrics": {}, "chartData": {}}
             else:
                 # Fallback to df preview
                 result = _build_fallback_from_df(df, ctx)
@@ -170,8 +180,22 @@ def main() -> int:
         if "metrics" not in result or not isinstance(result.get("metrics"), dict):
             result["metrics"] = {"rows": int(len(df)), "columns": int(len(df.columns))}
         if "chartData" not in result or not isinstance(result.get("chartData"), dict):
-            # Minimal chart
-            result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"]
+            # Only provide a fallback chart when explicitly requested
+            try:
+                q = str((ctx or {}).get("question") or "").lower()
+            except Exception:
+                q = ""
+            wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
+            result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"] if wants_chart else {}
+
+        # Enforce explicit request and limits even if user code returned a chart
+        try:
+            q = str((ctx or {}).get("question") or "").lower()
+        except Exception:
+            q = ""
+        wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
+        if not wants_chart:
+            result["chartData"] = {}
 
         # Cheap quality gate for common analytic intents
         try:

@@ -1,4 +1,4 @@
-# AI Data Analyst – Progress Report
+﻿# AI Data Analyst â€“ Progress Report
 
 Date: 2025-10-03 01:47 (+02:00)
 
@@ -12,8 +12,8 @@ Date: 2025-10-03 01:47 (+02:00)
 - **Cloud Run service: `preprocess-svc`**
   - Framework: `FastAPI` in `backend/run-preprocess/main.py`.
   - Endpoints:
-    - `GET /healthz` – lightweight health endpoint (service is private; unauthenticated calls may 403/404).
-    - `POST /eventarc` – Eventarc target; parses CloudEvents in multiple delivery shapes (structured, binary, Pub/Sub push, and GCS notification compatibility).
+    - `GET /healthz` â€“ lightweight health endpoint (service is private; unauthenticated calls may 403/404).
+    - `POST /eventarc` â€“ Eventarc target; parses CloudEvents in multiple delivery shapes (structured, binary, Pub/Sub push, and GCS notification compatibility).
   - Responsibilities:
     - Download raw file from GCS under `users/{uid}/sessions/{sid}/datasets/{datasetId}/raw/input.{csv|xlsx}`.
     - Run pipeline `backend/run-preprocess/pipeline_adapter.py` to clean and profile data.
@@ -79,7 +79,7 @@ flowchart TD
     - Bucket-scoped `roles/storage.objectAdmin` on `ai-data-analyser-files`.
     - `roles/eventarc.eventReceiver` for Eventarc delivery.
     - `roles/iam.serviceAccountTokenCreator` (self) for IAM-based signing.
-    - GCS service account granted `roles/pubsub.publisher` for CloudEvents → Pub/Sub.
+    - GCS service account granted `roles/pubsub.publisher` for CloudEvents â†’ Pub/Sub.
   - Cloud Run service is private; HTTP access requires identity.
 
   - Script: `backend/deploy.ps1` handles:
@@ -106,6 +106,70 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-10-06 (Footer meta formatting + dynamic table width)**
+  - Frontend
+    - ChatMessage (frontend/src/components/ChatMessage.tsx): Footer chip now shows "N rows X M columns"; table wrapper uses w-fit so narrow tables avoid horizontal scroll.
+    - TableRenderer (frontend/src/components/renderers/TableRenderer.tsx): Container switched to inline-block with max-w-full and overflow-auto; table uses min-w-max so content defines width up to chat container, then horizontal scrollbar appears only when needed.
+    - App (frontend/src/App.tsx): Stable upload message id stored to update the same message meta when rows/columns arrive via Firestore.
+  - Timestamp
+    - 2025-10-06 16:05 (+02:00)
+- **2025-10-06 (Message footer metadata)**
+  - Frontend
+    - ChatMessage (frontend/src/components/ChatMessage.tsx): Added footer metadata chips next to the timestamp for text messages (file name, file size, rows  columns when available).
+    - App (frontend/src/App.tsx): Upload message now sets meta with file name/size; when preprocessing finishes, the same message is updated in-place with rows  columns via Firestore subscription.
+  - Timestamp
+    - 2025-10-06 15:15 (+02:00)
+- **2025-10-06 (UI polish follow-up)**
+  - Frontend
+    - ChatMessage (frontend/src/components/ChatMessage.tsx): Wrap table messages in an overflow container to keep within chat width and provide internal horizontal/vertical scrollbars.
+    - TableRenderer (frontend/src/components/renderers/TableRenderer.tsx): Use a scrollable container with min-w-max table to avoid spillover while allowing horizontal scroll; keeps sticky header and sorting.
+  - Notes
+    - Planning UI for dataset info presentation (file name/size and rowscolumns) as a metadata row under the message bubble or a subtle banner; pending selection before implementation.
+  - Timestamp
+    - 2025-10-06 15:06 (+02:00)
+- **2025-10-06 (UI/UX tweaks)**
+  - Frontend
+    - Chat UI (frontend/src/App.tsx, frontend/src/components/ChatMessage.tsx): Removed separate thinking bubble; Cancel button now appears inside the assistant status message. Message timestamps now include seconds (hh:mm:ss).
+    - TableRenderer (frontend/src/components/renderers/TableRenderer.tsx): Added subtle row dividers and hover highlight; implemented client-side sorting per column with icons.
+    - Upload notice (frontend/src/App.tsx): After upload, assistant message shows file name and size; when preprocessing completes, a follow-up message announces rows  columns via a Firestore snapshot listener.
+  - Backend
+    - Summary length (backend/functions/orchestrator/gemini_client.py): Increased max_output_tokens for summary generation from 256 to 1024 to reduce truncation.
+  - Timestamp
+    - 2025-10-06 14:19 (+02:00)
+- **2025-10-06**
+  - Backend
+    - Orchestrator worker (ackend/functions/orchestrator/worker.py): Removed default chart generation. chartData is returned only when the user's question explicitly asks for a chart (tokens: chart/plot/graph/visualization). If not requested, any user-code chart is coerced to {}. Result sanitation retained.
+    - Orchestrator main (ackend/functions/orchestrator/main.py): Metadata-only path now emits no default chart (chart_data = {}). When result chartData is invalid, it is set to {} (no synthesized chart). Summary fallback on exception changed to a neutral, data-focused sentence.
+    - Gemini client (ackend/functions/orchestrator/gemini_client.py): When LLM returns empty text, synthesize a concise, data-driven fallback using metrics (rows/columns) and a preview of column names from 	able_head.
+  - Frontend
+    - App (rontend/src/App.tsx): Append a chart bubble only when chartData has real content (labels > 0 and at least one numeric point in any series).
+    - TableRenderer (rontend/src/components/renderers/TableRenderer.tsx): Added vertical and horizontal scroll with max-h-[420px], sticky header, and cell overflow ellipsis while keeping whitespace-nowrap.
+  - Deferred
+    - Daily usage limit wiring deferred until Firebase Auth integration; no limit code changes in this iteration.
+  - Timestamp
+    - 2025-10-06 12:58 (+02:00)
+- **2025-10-05**
+  - Preprocess (v2 metadata, simple & pragmatic)
+    - Implemented simplified header detection with 4 signals and year-like tie-breaker; normalized confidence 0..1. Lookahead via `PREPROCESS_HEADER_LOOKAHEAD`.
+    - Added manual header-row override file `metadata/preprocess_overrides.json` (per dataset) and plumbed through service; optional env `PREPROCESS_HEADER_ROW_OVERRIDE` supported internally.
+    - Added v2 additive fields in `payload.json`: `schema_version: "2.0"`, `header_info` (minimal), `analysis_hints` (consolidated hints), and `dataset_summary`.
+    - Kept v1 fields intact (`dataset`, `columns`, `sample_rows`, `cleaning_report`, `mode`, `version`).
+  - Orchestrator
+    - Prepends a compact "Dataset context" (header row + confidence, headers preview, likely structure, summary) to the schema snippet for Gemini prompts; caps schema preview to 3â€“4 columns.
+  - Observability
+    - Emits `header_detection` structured log with `header_row_index`, `confidence`, `method`, `is_transposed`, `lookahead`, and `low_confidence` flag to support a log-based KPI.
+  - Local dev compatibility (Python 3.13)
+    - Updated `backend/run-preprocess/requirements.txt` with environment markers to allow newer wheels on Python 3.13 while preserving deployment pins for 3.12.
+    - Hardened Polars numeric parsing: remove parentheses via `str.replace_all`, then cast to `Float64`; fixed percent/K/M/B handling.
+    - Header detection now fills NAs pre-cast and ignores empty tokens; requires at least 2 non-empty cells to avoid selecting title-only rows.
+  - Tests & fixtures
+    - Added fixtures under `backend/run-preprocess/tests/fixtures/`: `balance_sheet.csv`, `multi_row_header.csv`, `title_rows.csv`.
+    - Added unit tests: `test_header_detection_simple.py` (positive/negative cases).
+    - Added integration test: `test_integration_polars_balance_sheet.py` (CSV via Polars end-to-end).
+    - Current result: 6 tests total, all passing locally on Python 3.13 (1 benign datetime parsing warning).
+  - Docs
+    - Added `backend/docs/payload_v1_vs_v2.md` (concise JSON examples) and annotated `backend/docs/payload_schema.json` with a note that v2 fields are additive and not validated by the v1 schema.
+
 - **2025-10-03**
   - Frontend
     - Integrated AuthContext with Firebase Anonymous Auth; `.env.example` added; dev server port set to `5173`.
@@ -125,7 +189,7 @@ flowchart TD
     - Added `TableRenderer.tsx` and `ChartRenderer.tsx` (Recharts) and updated `ChatMessage.tsx` to dispatch per kind.
     - On `done`, convert placeholder to summary text and append separate table and chart bubbles when present.
   - Backend (Phase 1)
-    - Fixed artifact URL signing in `functions/orchestrator/main.py` general path: now signs `uris_gs` → `uris` before Firestore write and SSE `done`.
+    - Fixed artifact URL signing in `functions/orchestrator/main.py` general path: now signs `uris_gs` â†’ `uris` before Firestore write and SSE `done`.
   - Hosting/Deploy (Phase 1)
     - Added Firebase Hosting rewrites for `/api/sign-upload-url` and `/api/chat` to Functions Gen2 in `europe-west4`.
     - Parameterized `--allow-unauthenticated` in `backend/deploy-analysis.ps1` via `ALLOW_UNAUTHENTICATED` env var (default off) for production auth at the edge via Hosting.
@@ -150,7 +214,7 @@ flowchart TD
   - Tests
     - Enhanced `backend/test.ps1`: SSE smoke test now checks that `done` contains HTTPS signed URLs (`uris.*`) and attempts to fetch them.
 - **2025-10-01**
-  - Backend Performance – Step 1 implemented.
+  - Backend Performance â€“ Step 1 implemented.
     - Orchestrator (`backend/functions/orchestrator/main.py`)
       - Switched to base64 IPC: downloads `cleaned.parquet` as bytes and passes to worker over stdin JSON (`parquet_b64`). Fallback to file path via `ORCH_IPC_MODE=filepath`.
       - Uses `payload.json` keys (`sample_rows`, `columns`) for LLM context; avoids parquet `head()` when payload exists.
@@ -175,12 +239,12 @@ flowchart TD
       - Parallelized upload steps; will add stage timing benchmarks in a follow-up.
 
 - **2025-10-01**
-  - Backend Performance – Step 2 implemented.
+  - Backend Performance â€“ Step 2 implemented.
     - Preprocess engine defaulted to Polars for CSV via `run-preprocess/pipeline_adapter_polars.py`; Excel remains via pandas.
     - Extracted `process_df_to_artifacts()` in `run-preprocess/pipeline_adapter.py` to centralize cleaning/payload logic (shared by both adapters).
     - Dependencies: added `polars[xlsx]==1.7.1`, aligned `numpy==2.0.2` in `run-preprocess/requirements.txt`.
     - Deployed new `preprocess-svc` revision with `--cpu=2 --memory=2Gi --concurrency=10` and `PREPROCESS_ENGINE=polars`.
-    - Next: run `backend/test.ps1` to smoke test end-to-end (upload → Eventarc → artifacts + Firestore).
+    - Next: run `backend/test.ps1` to smoke test end-to-end (upload â†’ Eventarc â†’ artifacts + Firestore).
 
 - **2025-10-01**
   - Polars adapter bugfix and redeploy.
@@ -202,7 +266,7 @@ flowchart TD
   - Milestone 2: Implemented LLM-driven analysis with Gemini 2.5 Flash.
     - Orchestrator (`backend/functions/orchestrator/`) now downloads `cleaned.parquet`, generates Python via LLM, validates with AST (allowlist: pandas, numpy, math, json), and executes in a sandboxed subprocess with a 60s hard timeout.
     - Persists results to GCS: `table.json`, `metrics.json`, `chart_data.json`, `summary.json`; writes Firestore `messages/{messageId}` doc.
-    - SSE event flow: `received → validating → generating_code → running_fast → summarizing → persisting → done` (+ `ping`).
+    - SSE event flow: `received â†’ validating â†’ generating_code â†’ running_fast â†’ summarizing â†’ persisting â†’ done` (+ `ping`).
     - CORS defaults to `http://localhost:3000`.
   - Docs updated: `backend/docs/api.md` now documents SSE contract and `chartData` schema. `README.md` includes chat usage and env var notes.
   - `backend/test.ps1` extended with a best-effort SSE smoke test.

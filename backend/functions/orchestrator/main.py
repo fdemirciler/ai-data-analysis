@@ -249,7 +249,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         total_cols = int(dataset_meta.get("columns") or 0)
         table = sample_rows or []
         metrics = {"rows": total_rows, "columns": total_cols}
-        chart_data = {"kind": "bar", "labels": [], "series": [{"label": "Count", "data": []}]}
+        # Do not render a default chart in metadata-only answers
+        chart_data = {}
 
         # Persist and done (no parquet or worker)
         yield _sse_format({"type": "persisting"})
@@ -394,7 +395,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     if not isinstance(metrics, dict):
         metrics = {}
     if not isinstance(chart_data, dict):
-        chart_data = {"kind": "bar", "labels": [], "series": [{"label": "Value", "data": []}]}
+        # Do not synthesize a default chart; only show charts when explicitly requested
+        chart_data = {}
     table_sample = table[: min(len(table), 50)]
 
     # summarizing (generate summary from actual results)
@@ -403,8 +405,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         summary = gemini_client.generate_summary(question, table_sample, metrics, code=code)
     except Exception as e:
         print(f"WARNING: Summary generation failed: {e}", file=sys.stderr)
-        # Fallback to the pre-run summary if post-run generation fails
-        summary = pre_summary or "Analysis complete. See chart and table for details."
+        # Fallback to the pre-run summary if post-run generation fails, else neutral message
+        summary = pre_summary or "No textual summary available. See the table for details."
 
     # persist
     yield _sse_format({"type": "persisting"})

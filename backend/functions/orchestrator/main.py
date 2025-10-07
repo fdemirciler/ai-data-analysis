@@ -32,6 +32,7 @@ PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
 FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
 PING_INTERVAL_SECONDS = int(os.getenv("SSE_PING_INTERVAL_SECONDS", "22"))
 HARD_TIMEOUT_SECONDS = int(os.getenv("CHAT_HARD_TIMEOUT_SECONDS", "60"))
+REPAIR_TIMEOUT_SECONDS = int(os.getenv("CHAT_REPAIR_TIMEOUT_SECONDS", "30"))
 ORCH_IPC_MODE = os.getenv("ORCH_IPC_MODE", "base64").lower()
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
 
@@ -128,7 +129,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
     # --- Main Generation and Validation Loop ---
     yield _sse_format({"type": "generating_code"})
-    code, is_valid, validation_errors = "", False, ["Code generation failed."]
+    code, is_valid, validation_errors, warnings = "", False, ["Code generation failed."], []
     
     max_retries = 2
     for attempt in range(max_retries):
@@ -141,7 +142,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 question = f"The previous attempt failed. Please fix it. The error was: {validation_errors[0]}. Original question: {question}"
                 continue # Retry
 
-            # --- FIX: Unpack all three return values from the validator ---
+            # ✅ FIX 1: Unpack all three return values from the validator
             is_valid, validation_errors, warnings = sandbox_runner.validate_code(raw_code)
             
             if is_valid:
@@ -158,48 +159,162 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         yield _sse_format({"type": "error", "data": {"code": "CODE_VALIDATION_FAILED", "message": "; ".join(validation_errors)}})
         return
     
-    # --- Execute the validated code ---
-    yield _sse_format({"type": "running_fast"})
+    # --- Emit the validated code so the UI can display it (even if execution fails) ---
     try:
-        parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
+        yield _sse_format({
+            "type": "code",
+            "data": {
+                "language": "python",
+                "text": code,
+                "warnings": (warnings or [])
+            }
+        })
+    except Exception:
+        # Non-fatal: continue workflow even if emitting this event fails
+        pass
+
+    # --- Execute the validated code (with one-time repair on failure) ---
+    yield _sse_format({"type": "running_fast"})
+    parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
+    try:
         parquet_blob = bucket.blob(parquet_gcs_path)
         parquet_bytes = parquet_blob.download_as_bytes()
         parquet_b64 = base64.b64encode(parquet_bytes).decode("ascii")
+    except Exception as e:
+        yield _sse_format({"type": "error", "data": {"code": "DATA_READ_FAILED", "message": str(e)}})
+        return
 
+    def _run_once(code_to_run: str) -> dict:
         worker_path = os.path.join(os.path.dirname(__file__), "worker.py")
         proc = subprocess.run(
             [sys.executable, worker_path],
-            input=json.dumps({"code": code, "parquet_b64": parquet_b64, "ctx": {}}).encode("utf-8"),
+            input=json.dumps({
+                "code": code_to_run,
+                "parquet_b64": parquet_b64,
+                "ctx": {"question": question, "row_limit": 200},
+            }).encode("utf-8"),
             capture_output=True,
             timeout=HARD_TIMEOUT_SECONDS,
         )
-
         if proc.returncode != 0:
             raise RuntimeError(f"Worker process failed: {proc.stderr.decode('utf-8', errors='ignore')}")
-        
-        result = json.loads(proc.stdout)
+        return json.loads(proc.stdout)
+
+    tried_repair = False
+    try:
+        result = _run_once(code)
         if result.get("error"):
-             raise RuntimeError(f"Execution error: {result['error']}")
-
-    except Exception as e:
-        yield _sse_format({"type": "error", "data": {"code": "EXEC_FAILED", "message": str(e)}})
+            raise RuntimeError(f"Execution error: {result['error']}")
+    except subprocess.TimeoutExpired:
+        yield _sse_format({"type": "error", "data": {"code": "TIMEOUT_HARD", "message": f"Execution timed out after {HARD_TIMEOUT_SECONDS}s"}})
         return
+    except Exception as e_first:
+        # Attempt a single repair using the runtime error
+        try:
+            tried_repair = True
+            yield _sse_format({"type": "repairing"})
+            # Bound the repair step to avoid indefinite hangs
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(gemini_client.repair_code, question, schema_snippet, sample_rows, code, str(e_first))
+                try:
+                    repaired = future.result(timeout=REPAIR_TIMEOUT_SECONDS)
+                except FuturesTimeout:
+                    yield _sse_format({"type": "error", "data": {"code": "REPAIR_TIMEOUT", "message": f"Repair step timed out after {REPAIR_TIMEOUT_SECONDS}s"}})
+                    return
+            ok2, errs2, warns2 = sandbox_runner.validate_code(repaired)
+            if not ok2:
+                yield _sse_format({"type": "error", "data": {"code": "CODE_VALIDATION_FAILED", "message": "; ".join(errs2)}})
+                return
+            code = repaired
+            warnings = warns2
+            # Emit updated code for the UI
+            try:
+                yield _sse_format({
+                    "type": "code",
+                    "data": {"language": "python", "text": code, "warnings": (warnings or [])}
+                })
+            except Exception:
+                pass
+            # Re-run once
+            yield _sse_format({"type": "running_fast"})
+            result = _run_once(code)
+            if result.get("error"):
+                raise RuntimeError(f"Execution error: {result['error']}")
+        except subprocess.TimeoutExpired:
+            yield _sse_format({"type": "error", "data": {"code": "TIMEOUT_HARD", "message": f"Execution timed out after {HARD_TIMEOUT_SECONDS}s"}})
+            return
+        except Exception as e_second:
+            # Final failure after repair attempt
+            yield _sse_format({"type": "error", "data": {"code": "EXEC_FAILED", "message": str(e_second)}})
+            return
 
-    # Process and persist results
+    # ✅ FIX 2: Correct key names (singular, not plural)
     message_id = str(uuid.uuid4())
-    table = result.get("tables", [])[0] if result.get("tables") else [] # Assuming one table for now
-    chart_data = result.get("charts", [])[0] if result.get("charts") else {}
+    table = result.get("table", [])  # "table" not "tables"
+    chart_data = result.get("chartData", {})  # "chartData" not "charts"
+    metrics = result.get("metrics", {})
     
     yield _sse_format({"type": "summarizing"})
-    summary = result.get("summary") or gemini_client.generate_summary(question, table[:5], {})
+    summary = result.get("summary") or gemini_client.generate_summary(question, table[:5], metrics)
     
+    # ✅ FIX 3: Add actual persistence logic
     yield _sse_format({"type": "persisting"})
-    # ... (Persist logic for table, chart_data, summary to GCS) ...
     
-    # Final 'done' event
+    results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
+    table_path = f"{results_prefix}/table.json"
+    metrics_path = f"{results_prefix}/metrics.json"
+    chart_path = f"{results_prefix}/chart_data.json"
+    summary_path = f"{results_prefix}/summary.json"
+    
+    try:
+        table_blob = bucket.blob(table_path)
+        metrics_blob = bucket.blob(metrics_path)
+        chart_blob = bucket.blob(chart_path)
+        summary_blob = bucket.blob(summary_path)
+        
+        table_data = json.dumps({"rows": table}, ensure_ascii=False).encode("utf-8")
+        metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
+        chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
+        summary_data = json.dumps({"text": summary}, ensure_ascii=False).encode("utf-8")
+        
+        # Upload in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
+                executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
+                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"),
+                executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
+            ]
+            for f in futures:
+                f.result()
+        
+        # Generate signed URLs for frontend
+        table_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{table_path}")
+        metrics_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{metrics_path}")
+        chart_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{chart_path}")
+        summary_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{summary_path}")
+        
+    except Exception as e:
+        yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)}})
+        return
+    
+    # Final 'done' event with URLs
     yield _sse_format({
         "type": "done",
-        "data": { "messageId": message_id, "summary": summary, "tableSample": table[:50], "chartData": chart_data }
+        "data": {
+            "messageId": message_id,
+            "summary": summary,
+            "tableSample": table[:50],  # Now works correctly
+            "chartData": chart_data,
+            "metrics": metrics,
+            "uris": {
+                "table": table_url,
+                "metrics": metrics_url,
+                "chartData": chart_url,
+                "summary": summary_url
+            }
+        }
     })
 
 

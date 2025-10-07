@@ -52,10 +52,15 @@ def generate_analysis_code(
     prompt = (
         "You are an expert Python data analyst. Write a single Python function "
         "`def run(df, ctx):` to answer the user's question about the dataset.\n\n"
-        "OUTPUT RULES:\n"
+        "OUTPUT RULES (STRICT):\n"
         "- Return ONLY one fenced Python code block starting with ```python.\n"
-        "- The function must return a dictionary as specified in the project documentation.\n"
-        "- Use matplotlib or seaborn for charts when the user asks for a chart/plot/visualization.\n"
+        "- The function MUST return a dict with EXACT keys: 'table' (list of dict rows answering the question),\n"
+        "  'metrics' (dict of key figures), and 'chartData' (object with keys: 'kind', 'labels', 'series' = list of {label, data}).\n"
+        "- Do NOT return 'tables' or 'charts' keys. Use 'table' and 'chartData' only.\n"
+        "- Respect ctx.get('row_limit', 200) when returning 'table'.\n"
+        "- Use robust numeric handling: prefer pd.to_numeric(..., errors='coerce') and select_dtypes(include=[np.number]) for stats.\n"
+        "- Never use complex dtype or astype(complex).\n"
+        "- If a chart is appropriate, populate 'chartData' with non-empty labels and numeric series; else return empty {}.\n"
         "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
         "itertools, functools, collections, re, datetime, base64.\n\n"
         f"SCHEMA:\n{schema_snippet}\n\n"
@@ -75,7 +80,8 @@ def generate_analysis_code(
     text = _safe_response_text(resp)
     code = _extract_code_block(text)
 
-    if not code or "def run(" not in code:
+    # Accept 'def run (df, ctx):' with arbitrary whitespace
+    if not code or not re.search(r"def\s+run\s*\(", code):
         raise RuntimeError("CODEGEN_FAILED: Missing valid 'def run(df, ctx):' implementation.")
     return code
 
@@ -138,7 +144,7 @@ def generate_code_and_summary(
     """
     Return (code, summary) using a single Gemini call, with a one-time repair loop.
     """
-    fused = os.getenv("GEMINI_FUSED", "1").lower() not in ("0", "false", "no")
+    fused = os.getenv("GEMINI_FUSED", "0").lower() not in ("0", "false", "no")
     if not fused:
         code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
         return code, "Analysis planned. Executed results will follow."
@@ -148,16 +154,16 @@ def generate_code_and_summary(
 
     prompt = (
         "You are an expert Python data analyst.\n\n"
-        "Step 1: Provide a one-sentence summary of the analysis you will perform.\n"
-        "Step 2: Provide one fenced Python code block implementing `def run(df, ctx):`.\n\n"
-        "CODE REQUIREMENTS:\n"
-        "- Must return a dictionary with keys like 'summary', 'tables', 'charts'.\n"
-        "- Use matplotlib or seaborn if charts are requested.\n"
+        "Provide one fenced Python code block implementing `def run(df, ctx):`.\n\n"
+        "CODE REQUIREMENTS (STRICT):\n"
+        "- MUST return a dict with EXACT keys: 'table' (list[dict]), 'metrics' (dict), 'chartData' (kind, labels, series).\n"
+        "- Do NOT return 'tables' or 'charts'.\n"
+        "- Respect ctx.get('row_limit', 200). Use robust numeric handling; avoid complex dtype.\n"
         "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
         "itertools, functools, collections, re, datetime, base64.\n\n"
         f"--- DATA CONTEXT ---\nSchema: {schema_snippet}\nSample rows: {sample_preview}\n\n"
         f"--- QUESTION ---\n\"{question}\"\n\n"
-        "Return your one-line summary, then the Python code block."
+        "Return only the Python code block."
     )
 
     resp = model.generate_content(
@@ -193,8 +199,57 @@ def generate_code_and_summary(
     if not code:
         return "", text
 
-    summary = text.split("```")[0].strip() or "Analysis planned. Executed results will follow."
+    summary = "Analysis planned. Executed results will follow."
     return code, summary
+
+
+# ---------------------------------------------------------------------------
+# Repair Code given Runtime Error
+# ---------------------------------------------------------------------------
+
+def repair_code(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict],
+    previous_code: str,
+    runtime_error: str,
+    row_limit: int = 200,
+) -> str:
+    """Ask Gemini to repair previously generated code given a runtime error message."""
+    model = _ensure_model()
+    sample_preview = sample_rows[: min(len(sample_rows), 10)]
+
+    prompt = (
+        "You previously wrote Python analysis code which raised a runtime error. "
+        "Repair the code. Maintain the same intent, and follow these strict rules.\n\n"
+        "RULES (STRICT):\n"
+        "- Implement `def run(df, ctx):` and return a dict with EXACT keys: 'table' (list[dict]), 'metrics' (dict), 'chartData'.\n"
+        "- Do NOT return 'tables' or 'charts'. Use 'table' and 'chartData' only.\n"
+        "- Respect ctx.get('row_limit', 200) for the size of 'table'.\n"
+        "- Use robust numeric handling: prefer pd.to_numeric(..., errors='coerce'), select_dtypes(include=[np.number]).\n"
+        "- Never use complex dtype or astype(complex).\n"
+        "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
+        "itertools, functools, collections, re, datetime, base64.\n\n"
+        f"RUNTIME ERROR: {runtime_error}\n\n"
+        f"PREVIOUS CODE:\n```python\n{previous_code}\n```\n\n"
+        f"SCHEMA:\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS:\n{sample_preview}\n\n"
+        f"USER QUESTION:\n\"{question}\"\n\n"
+        "Return only the repaired Python code block."
+    )
+
+    resp = model.generate_content(
+        prompt,
+        generation_config={
+            "max_output_tokens": _MAX_TOKENS,
+            "temperature": 0.0,
+        },
+    )
+    text = _safe_response_text(resp)
+    code = _extract_code_block(text)
+    if not code or not re.search(r"def\s+run\s*\(", code):
+        raise RuntimeError("REPAIR_FAILED: Missing valid 'def run(df, ctx):' implementation.")
+    return code
 
 
 # ---------------------------------------------------------------------------
@@ -223,14 +278,14 @@ def _extract_code_block(text: str) -> str:
     m = re.search(r"```python\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if m:
         code = m.group(1).strip()
-        if "def run(" in code:
+        if re.search(r"def\s+run\s*\(", code):
             return code
 
     # 2. Fallback to any fenced block
     m = re.search(r"```(.*?)```", text, flags=re.DOTALL)
     if m:
         code = m.group(1).strip()
-        if "def run(" in code:
+        if re.search(r"def\s+run\s*\(", code):
             return code
 
     # 3. Heuristic fallback: find the start of the function definition

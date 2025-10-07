@@ -234,15 +234,52 @@ def main() -> int:
         elif not isinstance(result, dict):
             result = _fallback_result(df, ctx)
 
+        # Map plural keys to canonical ones when needed
+        if isinstance(result, dict):
+            # tables -> table (choose first reasonable table)
+            if "table" not in result and "tables" in result:
+                tables = result.get("tables")
+                table_rows = None
+                try:
+                    if isinstance(tables, list) and len(tables) > 0:
+                        first = tables[0]
+                        if isinstance(first, pd.DataFrame):
+                            table_rows = first.to_dict(orient="records")
+                        elif isinstance(first, list):
+                            table_rows = first
+                        elif isinstance(first, dict):
+                            table_rows = [first]
+                    elif isinstance(tables, dict) and len(tables) > 0:
+                        for v in tables.values():
+                            if isinstance(v, pd.DataFrame):
+                                table_rows = v.to_dict(orient="records")
+                                break
+                            elif isinstance(v, list):
+                                table_rows = v
+                                break
+                            elif isinstance(v, dict):
+                                table_rows = [v]
+                                break
+                except Exception:
+                    table_rows = None
+                if table_rows is not None:
+                    result["table"] = table_rows
+
+            # charts -> chartData (choose first chart-like dict)
+            if "chartData" not in result and "charts" in result:
+                charts = result.get("charts")
+                chosen = None
+                if isinstance(charts, dict):
+                    chosen = charts
+                elif isinstance(charts, list) and len(charts) > 0:
+                    chosen = charts[0]
+                if isinstance(chosen, dict):
+                    result["chartData"] = chosen
+
         # Ensure required keys
         result.setdefault("table", df.head(int(ctx.get("row_limit", 200))).to_dict(orient="records"))
         result.setdefault("metrics", {"rows": len(df), "columns": len(df.columns)})
         result.setdefault("chartData", {})
-
-        # Enforce chart rule
-        q = str(ctx.get("question", "")).lower()
-        if not any(t in q for t in ("chart", "plot", "graph", "visualization")):
-            result["chartData"] = {}
 
         sanitized = sanitize_for_json(result)
         print(json.dumps(sanitized, ensure_ascii=False))

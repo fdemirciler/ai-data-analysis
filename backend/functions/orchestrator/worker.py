@@ -1,21 +1,23 @@
+#!/usr/bin/env python3
 """
-Worker process to execute LLM-generated analysis code safely.
+Worker process to safely execute LLM-generated analysis code in a sandboxed environment.
 
-Usage: launched by the parent orchestrator via subprocess with JSON on stdin:
+This script is launched as a subprocess by the orchestrator. It receives JSON via stdin:
 {
   "code": "<python source>",
-  "parquet_path": "/tmp/cleaned.parquet",
+  "parquet_b64": "<base64 bytes>" | optional,
+  "arrow_ipc_b64": "<base64 bytes>" | optional,
+  "parquet_path": "/tmp/cleaned.parquet" | optional,
   "ctx": { ... }
 }
 
-It will:
-- Load df from parquet using pandas/pyarrow
-- Execute validated code with restricted builtins and guarded __import__
-- Invoke run(df, ctx) and return RESULT as JSON on stdout
+Steps:
+1. Validate code with sandbox_runner.
+2. Load the dataset into a DataFrame.
+3. Execute the validated run(df, ctx) safely.
+4. Sanitize and normalize the result for JSON output.
 
-Exit codes:
-- 0: success, stdout contains RESULT JSON
-- 1: validation or runtime error, stderr contains a short message
+It always prints a JSON payload to stdout and exits with 0 unless the payload is malformed.
 """
 from __future__ import annotations
 
@@ -23,203 +25,249 @@ import io
 import json
 import base64
 import sys
-import types
+import signal
+import traceback
+import os
+from typing import Any
 
-import pandas as pd  # noqa: F401  (provided as pd)
-import numpy as np  # noqa: F401  (provided as np)
+import pandas as pd
+import numpy as np
 import pyarrow as pa  # type: ignore
 
-ALLOWED_IMPORTS = {"pandas", "numpy", "math", "json"}
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Try to import sandbox validator (preferred)
+try:
+    from sandbox_runner import structured_validate, ALLOWED_IMPORTS as SANDBOX_ALLOWED_IMPORTS
+except Exception:
+    SANDBOX_ALLOWED_IMPORTS = {
+        "pandas", "numpy", "matplotlib", "seaborn",
+        "math", "statistics", "json", "io", "itertools", "functools",
+        "collections", "re", "datetime", "base64"
+    }
+    structured_validate = None  # fallback
 
 
-def sanitize_for_firestore(obj):
-    """Recursively traverses a dict/list to replace NaN, Inf, -Inf with None."""
+# --------------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------------
+ALLOWED_IMPORTS = set(SANDBOX_ALLOWED_IMPORTS)
+CODE_TIMEOUT = int(os.getenv("CODE_TIMEOUT", "60"))
+MAX_MEMORY_BYTES = int(os.getenv("CODE_MAX_MEMORY_BYTES", str(512 * 1024 * 1024)))  # 512MB
+try:
+    import resource
+except Exception:
+    resource = None
+
+
+# --------------------------------------------------------------------------
+# Utilities
+# --------------------------------------------------------------------------
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively replaces NaN/Inf with None for Firestore/JSON compatibility."""
     if isinstance(obj, dict):
-        return {k: sanitize_for_firestore(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [sanitize_for_firestore(item) for item in obj]
-    elif isinstance(obj, float):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float):
         if np.isnan(obj) or np.isinf(obj):
             return None
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
     return obj
 
 
-def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: D401
-    """Restricted import: only allow ALLOWED_IMPORTS root modules."""
-    root = name.split(".")[0]
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = (name.split(".") or [name])[0]
     if root not in ALLOWED_IMPORTS:
         raise ImportError(f"Import not allowed: {name}")
     return _orig_import(name, globals, locals, fromlist, level)
 
 
-def _prepare_globals():
+def _prepare_globals() -> dict:
+    """Prepare restricted globals for execution."""
     import builtins as _builtins
-
-    safe_builtins = {}
-    allowlist = {
-        "abs", "all", "any", "bool", "dict", "enumerate", "filter",
-        "float", "int", "len", "list", "map", "max", "min", "pow",
-        "range", "round", "set", "slice", "sorted", "str", "sum",
-        "zip", "print",  # benign
+    safe_builtins = {
+        b: getattr(_builtins, b)
+        for b in [
+            "abs", "all", "any", "bool", "dict", "enumerate", "filter",
+            "float", "int", "len", "list", "map", "max", "min", "pow",
+            "range", "round", "set", "slice", "sorted", "str", "sum",
+            "zip", "print", "isinstance", "getattr", "hasattr", "type",
+        ]
+        if hasattr(_builtins, b)
     }
-    for k in allowlist:
-        if hasattr(_builtins, k):
-            safe_builtins[k] = getattr(_builtins, k)
-
-    # Guard __import__
     safe_builtins["__import__"] = _safe_import
+    return {"__builtins__": safe_builtins, "pd": pd, "np": np, "plt": plt, "sns": sns, "RESULT": None}
 
-    globs = {
-        "__builtins__": safe_builtins,
-        "pd": pd,
-        "np": np,
-        "RESULT": None,
+
+def _set_resource_limits():
+    """Apply memory and CPU limits (POSIX only)."""
+    if resource is None:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (MAX_MEMORY_BYTES, MAX_MEMORY_BYTES))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (CODE_TIMEOUT + 5, CODE_TIMEOUT + 5))
+    except Exception:
+        pass
+
+
+class _TimeoutException(Exception):
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise _TimeoutException("User code timed out")
+
+
+def _load_dataframe(payload: dict) -> pd.DataFrame:
+    """Load df from base64 Parquet/Arrow or path."""
+    if payload.get("arrow_ipc_b64"):
+        ipc_bytes = base64.b64decode(payload["arrow_ipc_b64"])
+        with pa.ipc.open_stream(io.BytesIO(ipc_bytes)) as reader:
+            table = reader.read_all()
+        return table.to_pandas()
+    if payload.get("parquet_b64"):
+        data = base64.b64decode(payload["parquet_b64"])
+        return pd.read_parquet(io.BytesIO(data))
+    if payload.get("parquet_path"):
+        return pd.read_parquet(payload["parquet_path"])
+    raise ValueError("Missing data payload: no parquet_b64, arrow_ipc_b64, or parquet_path provided")
+
+
+def _fallback_result(df: pd.DataFrame, ctx: dict) -> dict:
+    """Fallback minimal result when code fails."""
+    row_limit = int((ctx or {}).get("row_limit", 200))
+    return {
+        "table": df.head(row_limit).to_dict(orient="records"),
+        "metrics": {"rows": len(df), "columns": len(df.columns)},
+        "chartData": {},
+        "message": "Fallback result generated due to code execution failure."
     }
-    return globs
 
 
-def _build_fallback_from_df(df: pd.DataFrame, ctx: dict) -> dict:
-    """Create a minimal RESULT dict from a DataFrame sample."""
-    try:
-        row_limit = int((ctx or {}).get("row_limit", 200))
-    except Exception:
-        row_limit = 200
-    table = df.head(row_limit).to_dict(orient="records")
-    metrics = {"rows": int(len(df)), "columns": int(len(df.columns))}
-    # Decide whether a fallback chart is allowed and explicitly requested
-    try:
-        q = str((ctx or {}).get("question") or "").lower()
-    except Exception:
-        q = ""
-    wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
-    if not wants_chart:
-        # Respect rule: no chart unless explicitly asked
-        chart = {}
-    else:
-        chart = {"kind": "bar", "labels": [], "series": [{"label": "Count", "data": []}]}
-        # Prefer a categorical distribution; else a numeric preview
-        try:
-            obj_cols = [c for c in df.columns if df[c].dtype == "object"]
-            if obj_cols:
-                vc = df[obj_cols[0]].astype("string").value_counts().head(5)
-                chart["labels"] = [str(x) for x in vc.index.tolist()]
-                chart["series"][0]["data"] = [int(x) for x in vc.values.tolist()]
-            else:
-                num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-                if num_cols:
-                    s = df[num_cols[0]].dropna().head(5)
-                    chart["labels"] = [str(i) for i in range(len(s))]
-                    chart["series"][0]["data"] = [float(x) for x in s.tolist()]
-        except Exception:
-            # Keep minimal chart structure on failure
-            pass
-    return {"table": table, "metrics": metrics, "chartData": chart}
-
-
+# --------------------------------------------------------------------------
+# Main Execution
+# --------------------------------------------------------------------------
 def main() -> int:
-    global _orig_import  # noqa: PLW0603
+    global _orig_import
     import builtins as _builtins
-
     _orig_import = _builtins.__import__
 
+    # Step 1: Read payload
     try:
         payload = json.load(sys.stdin)
         code = payload.get("code", "")
-        parquet_b64 = payload.get("parquet_b64")
-        arrow_ipc_b64 = payload.get("arrow_ipc_b64")
-        parquet_path = payload.get("parquet_path")
-        ctx = payload.get("ctx", {})
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"Invalid input: {e}\n")
+        ctx = payload.get("ctx", {}) or {}
+        if not code:
+            raise ValueError("Missing 'code' field in payload")
+    except Exception as e:
+        sys.stderr.write(f"Invalid input payload: {e}\n")
         return 1
 
+    # Step 2: Validate code via sandbox_runner
     try:
-        if arrow_ipc_b64:
-            ipc_bytes = base64.b64decode(arrow_ipc_b64)
-            with pa.ipc.open_stream(ipc_bytes) as reader:
-                table = reader.read_all()
-            df = table.to_pandas()
-        elif parquet_b64:
-            data = base64.b64decode(parquet_b64)
-            df = pd.read_parquet(io.BytesIO(data))
-        elif parquet_path:
-            df = pd.read_parquet(parquet_path)
-        else:
-            raise ValueError("Missing parquet_b64 or parquet_path")
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"Failed to read parquet: {e}\n")
-        return 1
+        if structured_validate:
+            validation = structured_validate(code)
+            if not validation.get("ok", False):
+                output = {
+                    "table": [],
+                    "metrics": {},
+                    "chartData": {},
+                    "error": "Validation failed",
+                    "validation": validation,
+                }
+                print(json.dumps(output, ensure_ascii=False))
+                return 0
+    except Exception as e:
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Validator error: {e}",
+        }
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
 
+    # Step 3: Load DataFrame
+    try:
+        df = _load_dataframe(payload)
+    except Exception as e:
+        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Failed to load data: {e}"}
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    # Step 4: Execute code safely
     globs = _prepare_globals()
-    locs = {}
+    locs: dict = {}
+
+    _set_resource_limits()
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(CODE_TIMEOUT)
 
     try:
         compiled = compile(code, filename="<user_code>", mode="exec")
         exec(compiled, globs, locs)
-        run = globs.get("run") or locs.get("run")
-        if not callable(run):
-            raise RuntimeError("Missing function run(df, ctx)")
-        result = run(df, ctx)
+
+        run_func = locs.get("run") or globs.get("run")
+        if not callable(run_func):
+            raise RuntimeError("Missing required function: def run(df, ctx):")
+
+        result = run_func(df, ctx)
         if result is None:
             result = globs.get("RESULT")
 
-        # Coerce common outputs into the expected dict shape
-        if not isinstance(result, dict):
-            if isinstance(result, pd.DataFrame):
-                result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {}}
-            elif isinstance(result, list):
-                # Assume list of rows
-                result = {"table": result, "metrics": {}, "chartData": {}}
-            else:
-                # Fallback to df preview
-                result = _build_fallback_from_df(df, ctx)
+        # Normalize
+        if isinstance(result, pd.DataFrame):
+            result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {}}
+        elif isinstance(result, list):
+            result = {"table": result, "metrics": {}, "chartData": {}}
+        elif not isinstance(result, dict):
+            result = _fallback_result(df, ctx)
 
-        # Ensure required keys exist; fill from df when missing
-        if "table" not in result or not isinstance(result.get("table"), list):
-            result["table"] = df.head(int((ctx or {}).get("row_limit", 200))).to_dict(orient="records")
-        if "metrics" not in result or not isinstance(result.get("metrics"), dict):
-            result["metrics"] = {"rows": int(len(df)), "columns": int(len(df.columns))}
-        if "chartData" not in result or not isinstance(result.get("chartData"), dict):
-            # Only provide a fallback chart when explicitly requested
-            try:
-                q = str((ctx or {}).get("question") or "").lower()
-            except Exception:
-                q = ""
-            wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
-            result["chartData"] = _build_fallback_from_df(df, ctx)["chartData"] if wants_chart else {}
+        # Ensure required keys
+        result.setdefault("table", df.head(int(ctx.get("row_limit", 200))).to_dict(orient="records"))
+        result.setdefault("metrics", {"rows": len(df), "columns": len(df.columns)})
+        result.setdefault("chartData", {})
 
-        # Enforce explicit request and limits even if user code returned a chart
-        try:
-            q = str((ctx or {}).get("question") or "").lower()
-        except Exception:
-            q = ""
-        wants_chart = any(tok in q for tok in ("chart", "plot", "graph", "visualization"))
-        if not wants_chart:
+        # Enforce chart rule
+        q = str(ctx.get("question", "")).lower()
+        if not any(t in q for t in ("chart", "plot", "graph", "visualization")):
             result["chartData"] = {}
 
-        # Cheap quality gate for common analytic intents
-        try:
-            q = str((ctx or {}).get("question") or "").lower()
-            intent_tokens = ("compare", "variance", "var", "difference", "diff", "change", "trend", "delta")
-            requires_computed = any(tok in q for tok in intent_tokens)
-            if requires_computed and result.get("table"):
-                table_cols = set(result["table"][0].keys()) if result["table"] else set()
-                raw_cols = set(map(str, df.columns.tolist()))
-                computed_cols = table_cols - raw_cols
-                if len(computed_cols) == 0:
-                    # Clean UX error result instead of a generic preview
-                    result = {"table": [], "metrics": {}, "chartData": {}, "error": "Result appears generic; no computed columns for requested analysis."}
-        except Exception:
-            pass
-        
-        # --- NEW: Sanitize the entire result object for Firestore/JSON compatibility ---
-        sanitized_result = sanitize_for_firestore(result)
-        
-        sys.stdout.write(json.dumps(sanitized_result, ensure_ascii=False))
+        sanitized = sanitize_for_json(result)
+        print(json.dumps(sanitized, ensure_ascii=False))
         return 0
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"Runtime error: {e}\n")
-        return 1
+
+    except _TimeoutException:
+        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Execution timed out after {CODE_TIMEOUT}s."}
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    except Exception as e:
+        tb = traceback.format_exc(limit=8)
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Runtime error: {e}",
+            "traceback": tb,
+        }
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 if __name__ == "__main__":

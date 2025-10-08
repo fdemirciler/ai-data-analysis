@@ -11,6 +11,8 @@ export type ChatEvent =
   | { type: "received"; data: { sessionId: string; datasetId: string } }
   | { type: "validating" }
   | { type: "generating_code" }
+  | { type: "code"; data: { language: "python"; text: string; warnings?: string[] } }
+  | { type: "repairing" }
   | { type: "running_fast" }
   | { type: "summarizing" }
   | { type: "persisting" }

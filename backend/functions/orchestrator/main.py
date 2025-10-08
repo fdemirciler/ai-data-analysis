@@ -13,7 +13,7 @@ from google.cloud import firestore
 from google.cloud import storage
 import pandas as pd
 import base64
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 import pyarrow as pa  # type: ignore
 import pyarrow.parquet as pq  # type: ignore
 
@@ -214,7 +214,6 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             tried_repair = True
             yield _sse_format({"type": "repairing"})
             # Bound the repair step to avoid indefinite hangs
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
             with ThreadPoolExecutor(max_workers=1) as ex:
                 future = ex.submit(gemini_client.repair_code, question, schema_snippet, sample_rows, code, str(e_first))
                 try:

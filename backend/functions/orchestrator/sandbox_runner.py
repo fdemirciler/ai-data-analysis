@@ -75,6 +75,26 @@ class _Validator(ast.NodeVisitor):
         self.warnings.append(msg)
 
     # -------------------------------
+    # Helpers: complex dtype detection
+    # -------------------------------
+    def _node_contains_complex(self, node: ast.AST) -> bool:
+        """Return True if the AST node subtree refers to complex dtype.
+
+        Matches any of the following patterns:
+        - Name 'complex' (built-in complex)
+        - Attribute whose attr startswith 'complex' (e.g., np.complex, complex64, complex128)
+        - Constant string containing 'complex' (e.g., "complex128")
+        """
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id == "complex":
+                return True
+            if isinstance(sub, ast.Attribute) and isinstance(sub.attr, str) and sub.attr.lower().startswith("complex"):
+                return True
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and "complex" in sub.value.lower():
+                return True
+        return False
+
+    # -------------------------------
     # Import Validation
     # -------------------------------
     def visit_Import(self, node: ast.Import) -> None:
@@ -101,8 +121,32 @@ class _Validator(ast.NodeVisitor):
     # Function & Call Validation
     # -------------------------------
     def visit_Call(self, node: ast.Call) -> None:
+        # Forbid dangerous builtins
         if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_NAMES:
             self._err(f"Forbidden call: {node.func.id}")
+
+        # Forbid direct usage of complex() builtin or np.complex* as a callable
+        if (isinstance(node.func, ast.Name) and node.func.id == "complex") or (
+            isinstance(node.func, ast.Attribute) and isinstance(node.func.attr, str) and node.func.attr.lower().startswith("complex")
+        ):
+            self._err("Complex dtype is not allowed. Use float via pd.to_numeric(..., errors='coerce') instead.")
+
+        # Forbid dtype=complex or astype(complex)
+        # 1) dtype keyword anywhere
+        for kw in getattr(node, "keywords", []) or []:
+            if kw.arg == "dtype" and kw.value is not None and self._node_contains_complex(kw.value):
+                self._err("Complex dtype is not allowed (dtype=complex).")
+
+        # 2) astype(complex) or astype(np.complex*) patterns
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "astype":
+            # check positional first arg
+            if node.args:
+                if self._node_contains_complex(node.args[0]):
+                    self._err("Complex dtype is not allowed (astype(complex)).")
+            # or keyword dtype
+            for kw in getattr(node, "keywords", []) or []:
+                if kw.arg == "dtype" and kw.value is not None and self._node_contains_complex(kw.value):
+                    self._err("Complex dtype is not allowed (astype(dtype=complex)).")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:

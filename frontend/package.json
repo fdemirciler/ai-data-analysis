@@ -46,7 +46,8 @@
             "tailwind-merge": "*",
             "vaul": "^1.1.2",
             "firebase": "^11.0.2",
-            "@microsoft/fetch-event-source": "^2.0.1"
+            "@microsoft/fetch-event-source": "^2.0.1",
+            "react-code-blocks": "^0.1.6"
       },
       "devDependencies": {
             "@tailwindcss/postcss": "^4.1.13",

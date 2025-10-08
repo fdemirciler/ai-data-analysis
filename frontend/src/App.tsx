@@ -34,6 +34,8 @@ export default function App() {
   const didInitRef = useRef<boolean>(false);
   const datasetMetaSubsRef = useRef<Record<string, () => void>>({});
   const uploadMsgIdByConvRef = useRef<Record<string, string | null>>({});
+  const codeInsertedByConvRef = useRef<Record<string, boolean>>({});
+  const codeMsgIdByConvRef = useRef<Record<string, string | null>>({});
 
   const formatBytes = (bytes: number): string => {
     if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -326,6 +328,9 @@ export default function App() {
 
     // Start SSE stream
     setIsTyping(true);
+    // Reset code insertion flag and code message id for this conversation/run
+    codeInsertedByConvRef.current[convId] = false;
+    codeMsgIdByConvRef.current[convId] = null;
     const ac = new AbortController();
     abortRef.current = ac;
     // Create and push assistant placeholder immediately
@@ -364,6 +369,58 @@ export default function App() {
         onEvent: (ev: ChatEvent) => {
           if (ev.type === "validating") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Validating input..." }));
           else if (ev.type === "generating_code") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Generating analysis code..." }));
+          else if (ev.type === "code") {
+            const existingId = codeMsgIdByConvRef.current[convId] || null;
+            if (existingId) {
+              // Update the code bubble tied to this run only
+              setConversations((prev) =>
+                prev.map((c) => {
+                  if (c.id !== convId) return c;
+                  const msgs = c.messages.slice();
+                  const idx = msgs.findIndex((m) => m.id === existingId);
+                  if (idx >= 0) {
+                    const m = msgs[idx] as any;
+                    msgs[idx] = {
+                      ...m,
+                      code: ev.data.text,
+                      language: ev.data.language || "python",
+                      warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                      timestamp: new Date(),
+                    } as any;
+                  }
+                  return { ...c, messages: msgs };
+                })
+              );
+            } else {
+              // Insert a brand-new code bubble for this run before the placeholder
+              const newId = `${convId}-${Date.now()}-code`;
+              codeMsgIdByConvRef.current[convId] = newId;
+              setConversations((prev) =>
+                prev.map((c) => {
+                  if (c.id !== convId) return c;
+                  const msgs = c.messages.slice();
+                  const phIdx = msgs.findIndex((m) => m.id === placeholderIdRef.current);
+                  const codeMsg: Message = {
+                    id: newId,
+                    role: "assistant",
+                    timestamp: new Date(),
+                    kind: "code",
+                    code: ev.data.text,
+                    language: ev.data.language || "python",
+                    warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                  } as any;
+                  if (phIdx >= 0) {
+                    msgs.splice(phIdx, 0, codeMsg);
+                  } else {
+                    msgs.push(codeMsg);
+                  }
+                  codeInsertedByConvRef.current[convId] = true;
+                  return { ...c, messages: msgs };
+                })
+              );
+            }
+          }
+          else if (ev.type === "repairing") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Repairing and retrying analysis..." }));
           else if (ev.type === "running_fast") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Running analysis..." }));
           else if (ev.type === "summarizing") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Summarizing results..." }));
           else if (ev.type === "persisting") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Saving results..." }));
@@ -424,8 +481,9 @@ export default function App() {
           }
         },
       });
-    } catch (e) {
-      // Network error already surfaced in onEvent or thrown; ensure state cleanup
+    } catch (e: any) {
+      // If the stream ends unexpectedly without an error event, reflect that on the placeholder
+      updatePlaceholder((m) => ({ ...m, kind: "error", content: `Connection error: ${e?.message || "stream interrupted"}` }));
       setIsTyping(false);
     } finally {
       abortRef.current = null;

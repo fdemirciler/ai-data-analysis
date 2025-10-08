@@ -4,6 +4,7 @@ import { Bot } from "lucide-react";
 import { TableRenderer } from "./renderers/TableRenderer";
 import { ChartRenderer } from "./renderers/ChartRenderer";
 import { Button } from "./ui/button";
+import { CopyBlock, dracula } from "react-code-blocks";
 
 export type Message =
   | {
@@ -50,6 +51,15 @@ export type Message =
         labels: string[];
         series: { label: string; data: number[] }[];
       };
+    }
+  | {
+      id: string;
+      role: "assistant";
+      timestamp: Date;
+      kind: "code";
+      code: string;
+      language?: "python";
+      warnings?: string[];
     };
 
 interface ChatMessageProps {
@@ -69,6 +79,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
       return "";
     }
   }, [message.timestamp]);
+  // no-op state for now
 
   return (
     <div className="w-full py-8 px-4">
@@ -114,6 +125,33 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
             </div>
           )}
           {message.kind === "chart" && <ChartRenderer chartData={message.chartData} />}
+          {message.kind === "code" && (
+            <div className="border rounded-xl p-4 bg-background">
+              <details>
+                <summary className="cursor-pointer select-none font-medium">View generated Python script</summary>
+                <div className="mt-3 space-y-3">
+                  <div className="text-sm">
+                    <CopyBlock
+                      text={message.code}
+                      language={message.language || "python"}
+                      wrapLongLines
+                      theme={dracula}
+                    />
+                  </div>
+                  {Array.isArray(message.warnings) && message.warnings.length > 0 && (
+                    <div className="mt-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 dark:text-amber-200 dark:bg-amber-950 dark:border-amber-900">
+                      <div className="font-medium mb-1">Validator warnings</div>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {message.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </div>
+          )}
           <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
             <span>{timeStr}</span>
             {message.kind === "text" && message.meta?.fileName && (

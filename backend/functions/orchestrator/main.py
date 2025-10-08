@@ -4,6 +4,7 @@ import time
 import uuid
 import subprocess
 import sys
+import io
 from datetime import datetime, timezone, timedelta
 from typing import Generator, Iterable
 
@@ -25,6 +26,8 @@ import google.auth.transport.requests
 
 import gemini_client
 import sandbox_runner
+import analysis_toolkit
+import aliases
 from google.api_core import exceptions as gax_exceptions  # type: ignore
 
 # Configuration
@@ -35,6 +38,19 @@ HARD_TIMEOUT_SECONDS = int(os.getenv("CHAT_HARD_TIMEOUT_SECONDS", "60"))
 REPAIR_TIMEOUT_SECONDS = int(os.getenv("CHAT_REPAIR_TIMEOUT_SECONDS", "30"))
 ORCH_IPC_MODE = os.getenv("ORCH_IPC_MODE", "base64").lower()
 RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
+
+# Smart dispatcher flags
+FASTPATH_ENABLED = os.getenv("FASTPATH_ENABLED", "1").lower() not in ("0", "false", "no")
+FALLBACK_ENABLED = os.getenv("FALLBACK_ENABLED", "1").lower() not in ("0", "false", "no")
+CODE_RECONSTRUCT_ENABLED = os.getenv("CODE_RECONSTRUCT_ENABLED", "1").lower() not in ("0", "false", "no")
+MIN_FASTPATH_CONFIDENCE = float(os.getenv("MIN_FASTPATH_CONFIDENCE", "0.65"))
+CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CLASSIFIER_TIMEOUT_SECONDS", "8"))
+MAX_FASTPATH_ROWS = int(os.getenv("MAX_FASTPATH_ROWS", "50000"))
+FORCE_FALLBACK_MIN_ROWS = int(os.getenv("FORCE_FALLBACK_MIN_ROWS", "500000"))
+MAX_CHART_POINTS = int(os.getenv("MAX_CHART_POINTS", "500"))
+TOOLKIT_VERSION = int(os.getenv("TOOLKIT_VERSION", str(getattr(analysis_toolkit, "TOOLKIT_VERSION", 1))))
+MIRROR_COMMAND_TO_FIRESTORE = os.getenv("MIRROR_COMMAND_TO_FIRESTORE", "0").lower() in ("1", "true", "yes")
+CODEGEN_TIMEOUT_SECONDS = int(os.getenv("CODEGEN_TIMEOUT_SECONDS", "30"))
 
 ALLOWED_ORIGINS = {
     o.strip()
@@ -126,6 +142,212 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
     schema_snippet = json.dumps(payload_obj.get("columns", {}))[:1000]
     sample_rows = payload_obj.get("sample_rows", [])[:10]
+    dataset_meta = payload_obj.get("dataset", {}) or {}
+    dataset_rows = int(dataset_meta.get("rows") or 0)
+    column_names = list(dataset_meta.get("column_names") or (payload_obj.get("columns", {}) or {}).keys())
+
+    # --- Optional: Show Code Reconstruction Path ---
+    try:
+        if CODE_RECONSTRUCT_ENABLED:
+            show_req = gemini_client.is_show_code_request(question)
+            if isinstance(show_req, dict) and show_req.get("is_code_request") is True:
+                # Find last command.json under results
+                results_prefix = f"users/{uid}/sessions/{session_id}/results/"
+                latest_blob = None
+                for blob in storage_client.list_blobs(FILES_BUCKET, prefix=results_prefix):
+                    if blob.name.endswith("/command.json"):
+                        if latest_blob is None or (getattr(blob, "updated", None) and blob.updated > latest_blob.updated):
+                            latest_blob = blob
+                if latest_blob is None:
+                    yield _sse_format({"type": "error", "data": {"code": "NO_PREV_COMMAND", "message": "No previous analysis found to reconstruct code."}})
+                    return
+                cmd = json.loads(latest_blob.download_as_text())
+                tool = cmd.get("intent") or "DESCRIBE"
+                params = cmd.get("params") or {}
+                code_text = gemini_client.reconstruct_code_from_tool_call(tool, params, schema_snippet)
+                yield _sse_format({
+                    "type": "code",
+                    "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
+                })
+                return
+    except Exception:
+        # Non-fatal; continue with normal flow
+        pass
+
+    # --- Smart Dispatcher: Fast-path Classification ---
+    if FASTPATH_ENABLED and (FORCE_FALLBACK_MIN_ROWS <= 0 or dataset_rows < FORCE_FALLBACK_MIN_ROWS):
+        # Build hinting block
+        hinting = json.dumps({
+            "aliases": getattr(aliases, "ALIASES", {}),
+            "dataset_summary": payload_obj.get("dataset_summary") or payload_obj.get("dataset", {}),
+            "columns": column_names[:50],
+        })
+
+        classification = None
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(
+                    gemini_client.classify_intent,
+                    question,
+                    schema_snippet,
+                    sample_rows,
+                    analysis_toolkit.TOOLS_SPEC,
+                    hinting,
+                )
+                remaining = CLASSIFIER_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        classification = fut.result(timeout=min(remaining, 2))
+                        break
+                    except FuturesTimeout:
+                        yield _sse_format({"type": "still_working"})
+                        remaining -= 2
+                        if remaining <= 0:
+                            raise
+        except FuturesTimeout:
+            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+        except Exception:
+            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+
+        intent = (classification or {}).get("intent") or "UNKNOWN"
+        params = (classification or {}).get("params") or {}
+        confidence = float((classification or {}).get("confidence") or 0.0)
+
+        if intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT", "DESCRIBE"} and confidence >= MIN_FASTPATH_CONFIDENCE:
+            yield _sse_format({"type": "generating_code"})
+            yield _sse_format({"type": "running_fast"})
+            parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
+            try:
+                parquet_blob = bucket.blob(parquet_gcs_path)
+                parquet_bytes = parquet_blob.download_as_bytes()
+            except Exception as e:
+                yield _sse_format({"type": "error", "data": {"code": "DATA_READ_FAILED", "message": str(e)}})
+            else:
+                try:
+                    # Determine needed columns
+                    needed_cols = None
+                    if intent == "AGGREGATE":
+                        dim = aliases.resolve_column(params.get("dimension"), column_names) or params.get("dimension")
+                        met = aliases.resolve_column(params.get("metric"), column_names) or params.get("metric")
+                        needed_cols = [c for c in [dim, met] if c]
+                    elif intent == "VARIANCE":
+                        dim = aliases.resolve_column(params.get("dimension"), column_names) or params.get("dimension")
+                        a = aliases.resolve_column(params.get("periodA"), column_names) or params.get("periodA")
+                        b = aliases.resolve_column(params.get("periodB"), column_names) or params.get("periodB")
+                        needed_cols = [c for c in [dim, a, b] if c]
+                    elif intent == "FILTER_SORT":
+                        sort_col = aliases.resolve_column(params.get("sort_col"), column_names) or params.get("sort_col")
+                        fcol = params.get("filter_col")
+                        fcol = aliases.resolve_column(fcol, column_names) if fcol else fcol
+                        needed_cols = [c for c in [sort_col, fcol] if c]
+
+                    if needed_cols:
+                        df = pd.read_parquet(io.BytesIO(parquet_bytes), columns=needed_cols)
+                    else:
+                        df = pd.read_parquet(io.BytesIO(parquet_bytes))
+                    if MAX_FASTPATH_ROWS > 0 and len(df) > MAX_FASTPATH_ROWS:
+                        df = df.head(MAX_FASTPATH_ROWS)
+
+                    # Execute
+                    if intent == "AGGREGATE":
+                        res_df = analysis_toolkit.run_aggregation(df, dim, met, params.get("func", "sum"))
+                    elif intent == "VARIANCE":
+                        res_df = analysis_toolkit.run_variance(df, dim, a, b)
+                    elif intent == "FILTER_SORT":
+                        res_df = analysis_toolkit.run_filter_and_sort(
+                            df,
+                            sort_col=sort_col,
+                            ascending=bool(params.get("ascending", False)),
+                            limit=int(params.get("limit", 50) or 50),
+                            filter_col=fcol,
+                            filter_val=params.get("filter_val"),
+                        )
+                    else:
+                        res_df = analysis_toolkit.run_describe(df)
+
+                    summary_obj = gemini_client.format_final_response(question, res_df)
+                    summary_text = summary_obj.get("summary") or ""
+                    table_rows = res_df.head(50).to_dict(orient="records")
+                    metrics = {"rows": int(getattr(res_df, "shape", [0, 0])[0] or 0),
+                               "columns": int(getattr(res_df, "shape", [0, 0])[1] or 0)}
+                    chart_data = {}
+
+                    yield _sse_format({"type": "persisting"})
+                    message_id = str(uuid.uuid4())
+                    results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
+                    table_path = f"{results_prefix}/fastpath_table.json"
+                    metrics_path = f"{results_prefix}/fastpath_metrics.json"
+                    chart_path = f"{results_prefix}/fastpath_chart_data.json"
+                    summary_path = f"{results_prefix}/summary.json"
+                    command_path = f"{results_prefix}/command.json"
+                    strategy_path = f"{results_prefix}/strategy.json"
+
+                    try:
+                        table_blob = bucket.blob(table_path)
+                        metrics_blob = bucket.blob(metrics_path)
+                        chart_blob = bucket.blob(chart_path)
+                        summary_blob = bucket.blob(summary_path)
+                        command_blob = bucket.blob(command_path)
+                        strategy_blob = bucket.blob(strategy_path)
+
+                        table_data = json.dumps({"rows": table_rows}, ensure_ascii=False).encode("utf-8")
+                        metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
+                        chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
+                        summary_data = json.dumps({"text": summary_text}, ensure_ascii=False).encode("utf-8")
+                        command_data = json.dumps({
+                            "intent": intent,
+                            "params": params,
+                            "confidence": confidence,
+                            "toolkitVersion": TOOLKIT_VERSION,
+                        }, ensure_ascii=False).encode("utf-8")
+                        strategy_data = json.dumps({
+                            "strategy": "fastpath",
+                            "version": TOOLKIT_VERSION,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }, ensure_ascii=False).encode("utf-8")
+
+                        with ThreadPoolExecutor(max_workers=6) as executor:
+                            futures = [
+                                executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
+                                executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
+                                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"),
+                                executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
+                                executor.submit(command_blob.upload_from_string, command_data, content_type="application/json"),
+                                executor.submit(strategy_blob.upload_from_string, strategy_data, content_type="application/json"),
+                            ]
+                            for f in futures:
+                                f.result()
+                        table_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{table_path}")
+                        metrics_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{metrics_path}")
+                        chart_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{chart_path}")
+                        summary_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{summary_path}")
+                    except Exception as e:
+                        yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)}})
+                        return
+
+                    yield _sse_format({
+                        "type": "done",
+                        "data": {
+                            "messageId": message_id,
+                            "summary": summary_text,
+                            "tableSample": table_rows,
+                            "chartData": chart_data,
+                            "metrics": metrics,
+                            "strategy": "fastpath",
+                            "uris": {
+                                "table": table_url,
+                                "metrics": metrics_url,
+                                "chartData": chart_url,
+                                "summary": summary_url
+                            }
+                        }
+                    })
+                    return
+                except Exception:
+                    try:
+                        yield _sse_format({"type": "fastpath_error", "data": {"message": "A quick path failed; trying a more flexible approach."}})
+                    except Exception:
+                        pass
 
     # --- Main Generation and Validation Loop ---
     yield _sse_format({"type": "generating_code"})
@@ -134,15 +356,31 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            raw_code, llm_response_text = gemini_client.generate_code_and_summary(question, schema_snippet, sample_rows)
-            
+            # Time-bounded code generation with keepalive pings
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(gemini_client.generate_code_and_summary, question, schema_snippet, sample_rows)
+                remaining = CODEGEN_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        raw_code, llm_response_text = fut.result(timeout=min(remaining, 2))
+                        break
+                    except FuturesTimeout:
+                        # Keep the connection alive for the UI
+                        try:
+                            yield _sse_format({"type": "still_working"})
+                        except Exception:
+                            pass
+                        remaining -= 2
+                        if remaining <= 0:
+                            raise
+
             if not raw_code:
                 # If code extraction fails, use the raw response for the repair prompt
                 validation_errors = [f"LLM did not return a valid code block. Response: {llm_response_text[:200]}"]
                 question = f"The previous attempt failed. Please fix it. The error was: {validation_errors[0]}. Original question: {question}"
                 continue # Retry
 
-            # ✅ FIX 1: Unpack all three return values from the validator
+            # Validate the generated code
             is_valid, validation_errors, warnings = sandbox_runner.validate_code(raw_code)
             
             if is_valid:
@@ -152,6 +390,16 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 # If validation fails, use the errors for the repair prompt
                 question = f"The previous code failed validation. Please fix it. Errors: {'; '.join(validation_errors)}. Original question: {question}"
 
+        except FuturesTimeout:
+            # Application-level timeout for code generation
+            yield _sse_format({
+                "type": "error",
+                "data": {
+                    "code": "CODEGEN_TIMEOUT",
+                    "message": f"Analysis step took longer than {CODEGEN_TIMEOUT_SECONDS}s. Please rephrase or try again.",
+                },
+            })
+            return
         except Exception as e:
             validation_errors = [f"An unexpected error occurred during code generation: {e}"]
 
@@ -166,7 +414,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             "data": {
                 "language": "python",
                 "text": code,
-                "warnings": (warnings or [])
+                "warnings": (warnings or []),
+                "source": "fallback_execution",
             }
         })
     except Exception:
@@ -231,7 +480,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             try:
                 yield _sse_format({
                     "type": "code",
-                    "data": {"language": "python", "text": code, "warnings": (warnings or [])}
+                    "data": {"language": "python", "text": code, "warnings": (warnings or []), "source": "fallback_execution"}
                 })
             except Exception:
                 pass
@@ -261,16 +510,18 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     yield _sse_format({"type": "persisting"})
     
     results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
-    table_path = f"{results_prefix}/table.json"
-    metrics_path = f"{results_prefix}/metrics.json"
-    chart_path = f"{results_prefix}/chart_data.json"
+    table_path = f"{results_prefix}/fallback_table.json"
+    metrics_path = f"{results_prefix}/fallback_metrics.json"
+    chart_path = f"{results_prefix}/fallback_chart_data.json"
     summary_path = f"{results_prefix}/summary.json"
+    strategy_path = f"{results_prefix}/strategy.json"
     
     try:
         table_blob = bucket.blob(table_path)
         metrics_blob = bucket.blob(metrics_path)
         chart_blob = bucket.blob(chart_path)
         summary_blob = bucket.blob(summary_path)
+        strategy_blob = bucket.blob(strategy_path)
         
         table_data = json.dumps({"rows": table}, ensure_ascii=False).encode("utf-8")
         metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
@@ -278,12 +529,19 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         summary_data = json.dumps({"text": summary}, ensure_ascii=False).encode("utf-8")
         
         # Upload in parallel
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        strategy_data = json.dumps({
+            "strategy": "fallback",
+            "version": TOOLKIT_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }, ensure_ascii=False).encode("utf-8")
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
                 executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
-                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"),
+                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"), 
                 executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
+                executor.submit(strategy_blob.upload_from_string, strategy_data, content_type="application/json"),
             ]
             for f in futures:
                 f.result()
@@ -307,6 +565,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             "tableSample": table[:50],  # Now works correctly
             "chartData": chart_data,
             "metrics": metrics,
+            "strategy": "fallback",
             "uris": {
                 "table": table_url,
                 "metrics": metrics_url,

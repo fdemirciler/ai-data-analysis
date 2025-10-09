@@ -1,103 +1,141 @@
 # AI Data Analyst
 
-AI Data Analyst is a serverless, event-driven pipeline that lets users upload data files directly to Google Cloud Storage and automatically preprocesses them into clean, analysis-ready artifacts. It also provides a chat interface that generates and executes Python analysis against the preprocessed data and streams results to the client.
+AI Data Analyst is a smart application that lets you upload your data files (like CSVs or Excel sheets) and then ask questions about them in plain English. The app analyzes your data and gives you back summaries, tables, and charts to help you understand it.
 
-## What this project does
-- Issues secure, short-lived signed URLs for direct uploads from the client to GCS.
-- Listens for object-finalize events and triggers a preprocessing service.
-- Cleans, profiles, and converts uploaded data into standard artifacts (Parquet + JSON payload/report).
-- Stores dataset metadata and status in Firestore for downstream consumption.
+It's built to be secure and efficient, running on Google Cloud. You can upload files directly and get your analysis in real-time, all through a simple chat interface.
 
-## Key components
-- `backend/functions/sign_upload_url/` – Cloud Function (Gen2) that validates upload requests (Firebase ID token) and returns a V4 signed URL (PUT).
-- `backend/functions/orchestrator/` – Cloud Function (Gen2) that orchestrates analysis and streams SSE events while generating code, executing it in a sandbox, and persisting artifacts.
-- `backend/run-preprocess/` – Cloud Run service that receives Eventarc events and runs the preprocessing pipeline.
-- Eventarc trigger – Routes GCS finalize events (on `ai-data-analyser-files`) to the Cloud Run `/eventarc` endpoint.
-- Firestore – Stores dataset documents (status, URIs, summary) with TTL-based cleanup.
-- GCS bucket `ai-data-analyser-files` – Stores raw uploads and generated artifacts.
+## How It Works
 
-## High-level workflow
+The application follows a simple, automated workflow from the moment you upload a file to when you receive your analysis:
+
+1.  **Secure Upload**: When you want to upload a file, the application first generates a special, secure link for you. This link lets you upload your file directly to a private Google Cloud Storage bucket without the file ever passing through our servers. This is a fast and secure way to handle your data.
+
+2.  **Automatic Preprocessing**: Once your file is uploaded, a process automatically kicks in to clean, analyze, and standardize your data. It figures out the data types in each column, gathers statistics, and converts your file into an efficient format (Parquet) that's ready for analysis.
+
+3.  **Chat with Your Data**: After your file is processed, you can start asking questions through the chat window. For example, you could ask, "What are the total sales by region?" or "Show me the top 10 best-selling products."
+
+4.  **Smart Analysis**: When you ask a question, the application's "Orchestrator" decides on the best way to answer it:
+    *   **Fast Path**: For common questions (like summing a column or sorting data), it uses a set of pre-built, highly efficient tools to get your answer almost instantly.
+    *   **Fallback Path**: For more complex questions, it uses a powerful AI model (Gemini) to write and run Python code to perform the analysis. This code runs in a secure, sandboxed environment to keep everything safe.
+
+5.  **Real-Time Results**: As the analysis is happening, the application sends you real-time updates. When it's done, you'll get a summary of the findings, along with any tables or charts that were generated. All the results are saved, so you can always come back to them later.
+
+## Workflow Diagram
+
+Here’s a diagram that shows how data flows through the system:
+
 ```mermaid
 flowchart TD
-  A[Client/Frontend] -->|Request| B[Cloud Function: sign-upload-url]
-  B -->|Signed URL + datasetId| A
-  A -->|PUT file| C[GCS: ai-data-analyser-files]
-  C -->|Object Finalized| D[Eventarc]
-  D -->|HTTP CloudEvent| E[Cloud Run: preprocess-svc /eventarc]
-  E -->|Artifacts| C
-  E -->|Status update| F[Firestore]
-  A -->|SSE chat| G[Cloud Function: chat]
-  G -->|LLM code + sandbox run| C
-  G -->|Persist results| C
-  G -->|Stream 'done'| A
+    subgraph "User Interaction"
+        A[1. Upload File] --> B{2. Chat with Data};
+    end
+
+    subgraph "Backend Processing"
+        C[Sign Upload URL] --> D[Cloud Storage];
+        E[Preprocess Service] --> D;
+        F[Orchestrator] --> G[Smart Dispatcher];
+        G -- Fast Path --> H[Analysis Toolkit];
+        G -- Fallback Path --> I[AI Code Generation];
+        I --> J[Sandbox Execution];
+        H --> K[Results];
+        J --> K;
+    end
+
+    subgraph "Data & State"
+        D;
+        L[Firestore Database];
+    end
+
+    A --> C;
+    B --> F;
+    D -- Triggers --> E;
+    E --> L[Update Status];
+    F --> L[Read Metadata];
+    K --> B;
+    K -- Persist --> D;
+
+
+    style A fill:#D5E8D4,stroke:#82B366,stroke-width:2px
+    style B fill:#D5E8D4,stroke:#82B366,stroke-width:2px
+    style C fill:#FFE6CC,stroke:#D79B00,stroke-width:2px
+    style E fill:#FFE6CC,stroke:#D79B00,stroke-width:2px
+    style F fill:#FFE6CC,stroke:#D79B00,stroke-width:2px
+    style L fill:#DAE8FC,stroke:#6C8EBF,stroke-width:2px
+    style D fill:#DAE8FC,stroke:#6C8EBF,stroke-width:2px
 ```
 
-## Design choices
-- Direct-to-GCS uploads using signed URLs avoid proxying large payloads through app servers.
-- Eventarc decouples ingestion from processing and enables reliable, at-least-once delivery.
-- No private keys: V4 URL signing relies on IAM-based impersonated credentials.
-- Stateless compute: Cloud Run function loads, processes, and writes artifacts; data/state live in GCS/Firestore.
-- TTL cleanup: Firestore documents have a TTL policy; add GCS lifecycle rules as needed.
+## Core Components
 
-## Repository layout
-- `backend/` – All deployable backend components
-  - `functions/` – Serverless functions (Gen2)
-    - `sign_upload_url/` – Signed URL issuance
-    - `orchestrator/` – SSE chat/orchestrator
-  - `run-preprocess/` – Cloud Run preprocess service (FastAPI), pipeline, and requirements
-  - `deploy-preprocess.ps1` – One-shot provisioning and deploy script (script-relative paths)
-  - `test.ps1` – Local smoke test (upload + artifact/Firestore checks)
-- `docs/` – API drafts and operational notes
- - `frontend/` – Vite + React app (Auth + Upload + Chat UI)
-## Getting started (quick)
-1. Ensure you’re on the correct project and have gcloud configured.
-2. Deploy using scripts in `backend/` (preprocess + functions). For functions only, use `deploy-analysis.ps1`.
-3. Optionally run `./backend/test.ps1` to upload a sample CSV and verify artifacts and Firestore status.
+The application is made up of a few key components that work together:
 
-## Frontend
+*   **Sign Upload URL Function**: This is the gatekeeper for file uploads. It checks that you're authorized to upload a file and then gives you a secure, one-time link to upload it directly to cloud storage.
+*   **Preprocess Service**: This service automatically processes your raw data file. It cleans it up, figures out what kind of data is in it, and saves it in a standardized format that's optimized for analysis.
+*   **Orchestrator Function**: This is the brain of the application. It takes your questions, decides whether to use the "Fast Path" or the "Fallback Path" for analysis, and then coordinates the work to get you an answer. It also streams results back to you in real-time.
+*   **Analysis Toolkit**: This is a collection of pre-written, highly optimized functions for common analysis tasks like filtering, sorting, and aggregating data. It's the engine behind the "Fast Path."
+*   **Gemini AI Client**: For complex questions, the orchestrator uses this client to talk to Google's Gemini AI model, which generates Python code on the fly to analyze your data.
+*   **Sandbox Runner**: To ensure security, any AI-generated code is first validated and then run in a secure, isolated sandbox. This prevents the code from doing anything it's not supposed to.
+*   **Firestore Database**: The app uses Firestore to keep track of your files, their processing status, and the history of your chat sessions.
 
-- Vite + React app under `frontend/` with:
-  - Firebase Anonymous Auth (see `.env.example` and create `.env.development` for local dev).
-  - File upload (paperclip) → `sign-upload-url` (signed PUT) → GCS → Eventarc → preprocess.
-  - Chat UI that streams SSE from `chat` and posts an answer on `done`.
+## Key Business Rules
 
-Dev setup:
-```bash
-cp frontend/.env.example frontend/.env.development
-# Fill VITE_CHAT_URL, VITE_SIGN_URL, and Firebase web app config for local dev
-npm install
-npm run dev  # serves on http://localhost:5173
-```
+Here are some of the important rules the application operates by:
 
-Important:
-- CORS allowlist includes: `http://localhost:5173`, Firebase Hosting origins.
-- Functions preflight allow lowercase headers (`authorization`, `content-type`, `x-session-id`).
-- Frontend passes `sessionId` as a query param to avoid custom header preflight.
+*   **File Size Limit**: You can upload files up to **20 MB**.
+*   **Allowed File Types**: The application accepts common data files like **CSV (.csv)** and **Excel (.xls, .xlsx)**.
+*   **Data Retention**: To manage storage, all uploaded files and their associated data are automatically scheduled for deletion **1 day** after they are uploaded. This is a default setting that can be configured.
+*   **Secure Access**: All interactions with the application require authentication, ensuring that only you can access your data and analysis history.
 
-Production env guidance:
-- The app defaults to relative endpoints `/api/sign-upload-url` and `/api/chat` in production via Firebase Hosting rewrites (see `frontend/firebase.json`).
-- Do not set `VITE_CHAT_URL` or `VITE_SIGN_URL` when building for production; leaving them unset enables the `/api/*` fallback.
-- For development, use `.env.development` to point to function URLs explicitly.
+## Configuration (Environment Variables)
 
-Chat persistence and UI:
-- Frontend persists sessions/messages to Firestore under `users/{uid}/sessions/{sid}/messages/{mid}`.
-- On startup, the app loads the last ~5 sessions into the sidebar and hydrates messages for the active one.
-- SSE events produce a live assistant placeholder that updates status and finally renders:
-  - summary (text),
-  - a sample table (`tableSample`),
-  - and a chart (`chartData`, bar/line) using Recharts.
-  Renderers live under `frontend/src/components/renderers/`.
+The application's behavior can be customized using environment variables. Here are some of the most important ones for the backend:
 
-Sandbox hardening plan (Phase 3):
-- Execute generated code in a hardened container (Cloud Run Job) with gVisor, CPU/memory limits, and no outbound network.
-- Keep as a configurable toggle to allow iterative rollout; current orchestrator path remains functional.
-- IAM and minimal scopes enforced; artifacts are short-lived, HTTPS-signed for client access.
+| Variable | Description | Default |
+| --- | --- | --- |
+| `FILES_BUCKET` | The name of the Google Cloud Storage bucket where files are stored. | `ai-data-analyser-files` |
+| `ALLOWED_ORIGINS` | A comma-separated list of web domains that are allowed to access the application. | `http://localhost:5173,https://ai-data-analyser.web.app,...` |
+| `MAX_FILE_BYTES` | The maximum allowed file size for uploads, in bytes. | `20971520` (20 MB) |
+| `TTL_DAYS` | The number of days before uploaded files and their metadata are automatically deleted. | `1` |
+| `FASTPATH_ENABLED` | A flag to turn the "Fast Path" analysis on or off. | `true` |
+| `FALLBACK_ENABLED` | A flag to turn the AI-driven "Fallback Path" on or off. | `true` |
+| `CHAT_HARD_TIMEOUT_SECONDS`| The maximum time allowed for a chat analysis to run before it times out. | `60` |
+| `CODEGEN_TIMEOUT_SECONDS`| The maximum time the AI is given to generate Python code. | `30` |
 
-## Status
-- Preprocessing stage: functional.
-- Chat (SSE) orchestrator: functional with robust fallbacks in the worker to ensure valid result payloads.
-- See `PROGRESS.md` for the latest changes and operational notes.
+---
 
-## Known limitations
-- If the LLM returns an empty `metrics` object intentionally, we currently persist it as `{}`; the worker only auto-fills metrics when the field is missing or wrong type. We may change this behavior to always include basic row/column counts.
-- Charts are optional; if not requested/returned, `chart_data.json` may be minimal or empty.
+## For Developers
+
+This section contains more technical details for developers working on the project.
+
+### Repository Layout
+
+-   **`backend/`**: Contains all the Google Cloud services.
+    -   `functions/`: Gen2 Cloud Functions for the main application logic.
+        -   `sign_upload_url/`: Handles secure file uploads.
+        -   `orchestrator/`: The main chat and analysis engine.
+    -   `run-preprocess/`: A Cloud Run service for the data preprocessing pipeline.
+-   **`frontend/`**: The web interface, built with Vite and React.
+
+### Getting Started
+
+1.  **Deploy Backend**: Use the PowerShell scripts in the `backend/` directory (`deploy-preprocess.ps1` and `deploy-analysis.ps1`) to deploy the services to your Google Cloud project.
+2.  **Configure Frontend**:
+    *   Copy `frontend/.env.example` to `frontend/.env.development`.
+    *   Fill in the environment variables with your Firebase project configuration and the URLs for your deployed backend functions.
+3.  **Run Locally**:
+    ```bash
+    # In the frontend directory
+    npm install
+    npm run dev
+    ```
+
+### Design Choices
+
+-   **Direct-to-GCS Uploads**: We use signed URLs to let the user's browser upload files directly to Google Cloud Storage. This is more efficient and secure than routing files through a server.
+-   **Event-Driven Architecture**: The preprocessing service is triggered by events from Cloud Storage, which decouples it from the upload process and makes the system more resilient.
+-   **Serverless**: The entire backend runs on serverless platforms (Cloud Functions and Cloud Run), which means it scales automatically and you only pay for what you use.
+-   **Impersonated Credentials**: The application uses IAM service account impersonation to generate signed URLs, which avoids the need to manage and store long-lived private keys.
+
+### Known Limitations
+
+-   If the AI model returns an empty `metrics` object, it is persisted as is. The system only auto-fills metrics if the field is missing entirely.
+-   Charts are optional. If the analysis doesn't produce a chart, the corresponding data file may be empty.

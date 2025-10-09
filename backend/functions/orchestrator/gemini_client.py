@@ -302,53 +302,66 @@ def classify_intent(
     tool_spec: list[dict],
     hinting: str | None = None,
 ) -> dict:
-    """Classify the user intent into one of the provided tools.
+    """Classify user intent using Gemini native function-calling.
 
-    Returns a dict like {"intent": str, "params": dict, "confidence": float}.
+    Returns: {"intent": str, "params": dict, "confidence": float}
     On failure, returns UNKNOWN with confidence 0.0.
     """
-    model = _ensure_model()
-    tools = ", ".join([t.get("name", "") for t in tool_spec])
-    sample_preview = sample_rows[: min(len(sample_rows), 6)]
+    # Build tools in Gemini format (function_declarations)
+    function_declarations = []
+    for t in tool_spec or []:
+        fn = {
+            "name": t.get("name"),
+            "description": t.get("description", ""),
+            "parameters": t.get("parameters", {"type": "object"}),
+        }
+        if fn["name"]:
+            function_declarations.append(fn)
+    tools_payload = [{"function_declarations": function_declarations}] if function_declarations else None
+
+    # Instantiate a model with tools
+    model_with_tools = genai.GenerativeModel(_MODEL_NAME, tools=tools_payload)
+
+    sample_preview = sample_rows[: min(len(sample_rows), 3)]
     hint_block = (hinting or "").strip()
 
     prompt = (
-        "You are a JSON-only router. Do NOT explain. Return STRICT JSON only.\n"
-        "Choose the best intent from this set: [" + tools + "] or UNKNOWN if none fits.\n"
-        "Output schema:\n"
-        "```json\n{\n  \"intent\": \"AGGREGATE|VARIANCE|FILTER_SORT|DESCRIBE|UNKNOWN\",\n"
-        "  \"params\": { },\n  \"confidence\": 0.0\n}\n```\n\n"
-        f"QUESTION: \n\"{question}\"\n\n"
+        "Determine which analysis function best answers the question using the schema.\n"
+        "If no tool applies, do not call any function.\n\n"
         f"SCHEMA (truncated):\n{schema_snippet}\n\n"
-        f"SAMPLE ROWS:\n{sample_preview}\n\n"
-        f"HINTING (aliases, dataset summary):\n{hint_block}\n\n"
-        "Return STRICT JSON only."
+        f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"
+        f"HINTS:\n{hint_block}\n\n"
+        f"QUESTION:\n{question}\n"
     )
 
     try:
-        resp = model.generate_content(
+        resp = model_with_tools.generate_content(
             prompt,
             generation_config={
-                "max_output_tokens": _MAX_TOKENS,
+                "max_output_tokens": 512,
                 "temperature": 0.1,
             },
+            tool_config={"function_calling_config": "ANY"},
         )
-        text = _safe_response_text(resp)
-        js = _extract_json_block(text)
-        if not js:
-            return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
-        data = json.loads(js)
-        intent = str(data.get("intent") or "UNKNOWN").upper()
-        params = data.get("params") or {}
-        conf = float(data.get("confidence") or 0.0)
-        # basic schema validation
-        if intent not in {"AGGREGATE", "VARIANCE", "FILTER_SORT", "DESCRIBE", "UNKNOWN"}:
-            intent = "UNKNOWN"
-        if not isinstance(params, dict):
-            params = {}
-        if conf < 0 or conf > 1:
-            conf = 0.0
-        return {"intent": intent, "params": params, "confidence": conf}
+        # Find first function_call
+        if getattr(resp, "candidates", None):
+            for c in resp.candidates:
+                content = getattr(c, "content", None)
+                parts = getattr(content, "parts", None) if content else None
+                if not parts:
+                    continue
+                for p in parts:
+                    fc = getattr(p, "function_call", None)
+                    if fc and getattr(fc, "name", None):
+                        name = str(fc.name)
+                        # args may be a dict-like
+                        try:
+                            args = dict(getattr(fc, "args", {}) or {})
+                        except Exception:
+                            args = {}
+                        return {"intent": name, "params": args, "confidence": 0.95}
+        # If no function call, return UNKNOWN
+        return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
     except Exception:
         return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
 
@@ -456,6 +469,47 @@ def format_final_response(question: str, result_df: pd.DataFrame) -> dict:
     summary = generate_summary(question, table_head, metrics)
     visuals: list[dict] = []
     return {"summary": summary, "visuals": visuals}
+
+
+def reconstruct_presentational_code(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict] | None,
+    last_exec_code: str | None = None,
+) -> str:
+    """Generate a clean presentational Python script for display.
+
+    Uses the last executed fallback code (if provided) as context to align logic,
+    but returns a simplified, commented script suitable for UI display only.
+    """
+    model = _ensure_model()
+    preview = (sample_rows or [])[: min(len(sample_rows or []), 5)]
+    context = last_exec_code or ""
+    prompt = (
+        "You are a senior data analyst. Create a clean, commented Python function\n"
+        "`def run(df, ctx):` that reproduces the last analysis over the dataset schema below.\n"
+        "Use idiomatic pandas/numpy and return a dict with keys: 'table' (list of rows),\n"
+        "'metrics' (dict), and 'chartData' (object). Respect ctx.get('row_limit', 200).\n"
+        "Avoid complex dtypes and keep it readable.\n\n"
+        f"SCHEMA:\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS (truncated):\n{preview}\n\n"
+        "If helpful, align with the following reference code (do not copy blindly; clean it up):\n"
+        f"```python\n{context}\n```\n\n"
+        "Return only one fenced Python block."
+    )
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": _MAX_TOKENS,
+                "temperature": 0.1,
+            },
+        )
+        text = _safe_response_text(resp)
+        code = _extract_code_block(text)
+        return code or ""
+    except Exception:
+        return ""
 
 
 def _extract_code_block(text: str) -> str:

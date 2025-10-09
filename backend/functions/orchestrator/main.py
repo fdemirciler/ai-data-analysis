@@ -29,6 +29,7 @@ import sandbox_runner
 import analysis_toolkit
 import aliases
 from google.api_core import exceptions as gax_exceptions  # type: ignore
+import logging
 
 # Configuration
 PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
@@ -151,25 +152,59 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         if CODE_RECONSTRUCT_ENABLED:
             show_req = gemini_client.is_show_code_request(question)
             if isinstance(show_req, dict) and show_req.get("is_code_request") is True:
-                # Find last command.json under results
+                # Identify latest result folder and strategy
                 results_prefix = f"users/{uid}/sessions/{session_id}/results/"
-                latest_blob = None
+                latest_strategy_blob = None
                 for blob in storage_client.list_blobs(FILES_BUCKET, prefix=results_prefix):
-                    if blob.name.endswith("/command.json"):
-                        if latest_blob is None or (getattr(blob, "updated", None) and blob.updated > latest_blob.updated):
-                            latest_blob = blob
-                if latest_blob is None:
+                    if blob.name.endswith("/strategy.json"):
+                        if latest_strategy_blob is None or (getattr(blob, "updated", None) and blob.updated > latest_strategy_blob.updated):
+                            latest_strategy_blob = blob
+                if latest_strategy_blob is None:
                     yield _sse_format({"type": "error", "data": {"code": "NO_PREV_COMMAND", "message": "No previous analysis found to reconstruct code."}})
                     return
-                cmd = json.loads(latest_blob.download_as_text())
-                tool = cmd.get("intent") or "DESCRIBE"
-                params = cmd.get("params") or {}
-                code_text = gemini_client.reconstruct_code_from_tool_call(tool, params, schema_snippet)
-                yield _sse_format({
-                    "type": "code",
-                    "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
-                })
-                return
+                # Determine strategy and messageId path
+                strategy_json = json.loads(latest_strategy_blob.download_as_text())
+                strategy = (strategy_json or {}).get("strategy") or ""
+                result_dir = latest_strategy_blob.name.rsplit("/", 1)[0]
+
+                if strategy == "fastpath":
+                    # Use command.json to reconstruct deterministic code
+                    cmd_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/command.json")
+                    if not cmd_blob.exists():
+                        yield _sse_format({"type": "error", "data": {"code": "NO_PREV_COMMAND", "message": "No command metadata found to reconstruct code."}})
+                        return
+                    cmd = json.loads(cmd_blob.download_as_text())
+                    tool = cmd.get("intent") or "DESCRIBE"
+                    params = cmd.get("params") or {}
+                    code_text = gemini_client.reconstruct_code_from_tool_call(tool, params, schema_snippet)
+                    yield _sse_format({
+                        "type": "code",
+                        "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
+                    })
+                    return
+                else:
+                    # Fallback: synthesize presentational code using last executed code as context if available
+                    ref_code = ""
+                    ref_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/fallback_exec_code.py")
+                    if ref_blob.exists():
+                        try:
+                            ref_code = ref_blob.download_as_text()
+                        except Exception:
+                            ref_code = ""
+                    code_text = gemini_client.reconstruct_presentational_code(
+                        question=question,
+                        schema_snippet=schema_snippet,
+                        sample_rows=sample_rows,
+                        last_exec_code=ref_code,
+                    )
+                    if not code_text:
+                        yield _sse_format({"type": "error", "data": {"code": "RECONSTRUCT_FAILED", "message": "Could not reconstruct code for the last analysis."}})
+                        return
+                    yield _sse_format({
+                        "type": "code",
+                        "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
+                    })
+                    return
     except Exception:
         # Non-fatal; continue with normal flow
         pass
@@ -209,11 +244,92 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         except Exception:
             classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
 
-        intent = (classification or {}).get("intent") or "UNKNOWN"
-        params = (classification or {}).get("params") or {}
+        # Canonicalize tool name and params to router intents
+        raw_intent = (classification or {}).get("intent") or "UNKNOWN"
+        raw_params = (classification or {}).get("params") or {}
         confidence = float((classification or {}).get("confidence") or 0.0)
 
-        if intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT", "DESCRIBE"} and confidence >= MIN_FASTPATH_CONFIDENCE:
+        # Map tool names to canonical intents
+        name_map = {
+            "run_aggregation": "AGGREGATE",
+            "run_variance": "VARIANCE",
+            "run_filter_and_sort": "FILTER_SORT",
+            "run_describe": "DESCRIBE",
+        }
+        intent = name_map.get(str(raw_intent), str(raw_intent).upper())
+
+        # Convert snake_case params to existing camelCase where needed
+        params = dict(raw_params)
+        if intent == "VARIANCE":
+            if "period_a" in params and "periodA" not in params:
+                params["periodA"] = params.get("period_a")
+            if "period_b" in params and "periodB" not in params:
+                params["periodB"] = params.get("period_b")
+
+        # Parameter validation and resolution
+        def _validate_and_resolve(i: str, p: dict) -> tuple[bool, dict]:
+            resolved = dict(p)
+            try:
+                if i == "AGGREGATE":
+                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["metric"] = aliases.resolve_column(p.get("metric"), column_names) or p.get("metric")
+                    return bool(resolved.get("dimension") and resolved.get("metric") and p.get("func")), resolved
+                if i == "VARIANCE":
+                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["periodA"] = aliases.resolve_column(p.get("periodA"), column_names) or p.get("periodA")
+                    resolved["periodB"] = aliases.resolve_column(p.get("periodB"), column_names) or p.get("periodB")
+                    return bool(resolved.get("dimension") and resolved.get("periodA") and resolved.get("periodB")), resolved
+                if i == "FILTER_SORT":
+                    resolved["sort_col"] = aliases.resolve_column(p.get("sort_col"), column_names) or p.get("sort_col")
+                    if p.get("filter_col"):
+                        resolved["filter_col"] = aliases.resolve_column(p.get("filter_col"), column_names) or p.get("filter_col")
+                    return bool(resolved.get("sort_col")), resolved
+                if i == "DESCRIBE":
+                    return True, resolved
+            except Exception:
+                return False, resolved
+            return False, resolved
+
+        params_ok, resolved_params = _validate_and_resolve(intent, params)
+
+        # Soft-accept logic
+        soft_threshold = max(0.0, MIN_FASTPATH_CONFIDENCE - 0.15)
+        is_fastpath_candidate = (intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT", "DESCRIBE"}) and (
+            confidence >= MIN_FASTPATH_CONFIDENCE or (params_ok and confidence >= soft_threshold)
+        )
+
+        # Optional SSE for debugging (no data rows logged)
+        if os.getenv("LOG_CLASSIFIER_RESPONSE") == "1":
+            try:
+                yield _sse_format({
+                    "type": "classification_result",
+                    "data": {"intent": intent, "params": resolved_params, "confidence": confidence}
+                })
+            except Exception:
+                pass
+        # Structured log for classifier outcome (no sample rows)
+        try:
+            logging.info(json.dumps({
+                "event": "classifier_result",
+                "intent": intent,
+                "confidence": confidence,
+                "params": resolved_params,
+                "dataset_rows": dataset_rows,
+            }))
+        except Exception:
+            pass
+
+        if is_fastpath_candidate:
+            try:
+                logging.info(json.dumps({
+                    "event": "router_decision",
+                    "strategy": "fastpath",
+                    "reason": "accepted",
+                    "intent": intent,
+                    "confidence": confidence,
+                }))
+            except Exception:
+                pass
             yield _sse_format({"type": "generating_code"})
             yield _sse_format({"type": "running_fast"})
             parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
@@ -250,17 +366,17 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
                     # Execute
                     if intent == "AGGREGATE":
-                        res_df = analysis_toolkit.run_aggregation(df, dim, met, params.get("func", "sum"))
+                        res_df = analysis_toolkit.run_aggregation(df, dim, met, resolved_params.get("func", params.get("func", "sum")))
                     elif intent == "VARIANCE":
                         res_df = analysis_toolkit.run_variance(df, dim, a, b)
                     elif intent == "FILTER_SORT":
                         res_df = analysis_toolkit.run_filter_and_sort(
                             df,
                             sort_col=sort_col,
-                            ascending=bool(params.get("ascending", False)),
-                            limit=int(params.get("limit", 50) or 50),
+                            ascending=bool(resolved_params.get("ascending", params.get("ascending", False))),
+                            limit=int((resolved_params.get("limit") or params.get("limit") or 50)),
                             filter_col=fcol,
-                            filter_val=params.get("filter_val"),
+                            filter_val=resolved_params.get("filter_val", params.get("filter_val")),
                         )
                     else:
                         res_df = analysis_toolkit.run_describe(df)
@@ -296,7 +412,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         summary_data = json.dumps({"text": summary_text}, ensure_ascii=False).encode("utf-8")
                         command_data = json.dumps({
                             "intent": intent,
-                            "params": params,
+                            "params": resolved_params,
                             "confidence": confidence,
                             "toolkitVersion": TOOLKIT_VERSION,
                         }, ensure_ascii=False).encode("utf-8")
@@ -346,6 +462,16 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 except Exception:
                     try:
                         yield _sse_format({"type": "fastpath_error", "data": {"message": "A quick path failed; trying a more flexible approach."}})
+                    except Exception:
+                        pass
+                    try:
+                        logging.info(json.dumps({
+                            "event": "router_decision",
+                            "strategy": "fallback",
+                            "reason": "fastpath_error",
+                            "intent": intent,
+                            "confidence": confidence,
+                        }))
                     except Exception:
                         pass
 
@@ -515,6 +641,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     chart_path = f"{results_prefix}/fallback_chart_data.json"
     summary_path = f"{results_prefix}/summary.json"
     strategy_path = f"{results_prefix}/strategy.json"
+    exec_code_path = f"{results_prefix}/fallback_exec_code.py"
     
     try:
         table_blob = bucket.blob(table_path)
@@ -522,26 +649,28 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         chart_blob = bucket.blob(chart_path)
         summary_blob = bucket.blob(summary_path)
         strategy_blob = bucket.blob(strategy_path)
+        exec_code_blob = bucket.blob(exec_code_path)
         
         table_data = json.dumps({"rows": table}, ensure_ascii=False).encode("utf-8")
         metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
         chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
         summary_data = json.dumps({"text": summary}, ensure_ascii=False).encode("utf-8")
         
-        # Upload in parallel
+        # Upload in parallel (do not expose exec code URL)
         strategy_data = json.dumps({
             "strategy": "fallback",
             "version": TOOLKIT_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }, ensure_ascii=False).encode("utf-8")
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             futures = [
                 executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
                 executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
                 executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"), 
                 executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
                 executor.submit(strategy_blob.upload_from_string, strategy_data, content_type="application/json"),
+                executor.submit(exec_code_blob.upload_from_string, code.encode("utf-8"), content_type="text/plain"),
             ]
             for f in futures:
                 f.result()

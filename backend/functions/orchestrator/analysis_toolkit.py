@@ -94,26 +94,52 @@ def run_describe(df: pd.DataFrame, include: str = "number") -> pd.DataFrame:
     return desc
 
 
-# Registry metadata (lightweight spec for classifier prompt)
+# Tools spec for Gemini native function-calling (snake_case)
 TOOLS_SPEC = [
     {
-        "name": "AGGREGATE",
+        "name": "run_aggregation",
         "description": "Group by a dimension and aggregate a numeric metric with a function",
-        "params": ["dimension", "metric", "func"],
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dimension": {"type": "string", "description": "Column to group by"},
+                "metric": {"type": "string", "description": "Numeric column to aggregate"},
+                "func": {"type": "string", "enum": ["sum", "mean", "count", "max", "min"], "description": "Aggregation function"},
+            },
+            "required": ["dimension", "metric", "func"],
+        },
     },
     {
-        "name": "VARIANCE",
-        "description": "Compare two numeric period columns aggregated by a dimension",
-        "params": ["dimension", "periodA", "periodB"],
+        "name": "run_variance",
+        "description": "Calculate difference and % change between two numeric period columns grouped by a dimension",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dimension": {"type": "string", "description": "Group key column"},
+                "period_a": {"type": "string", "description": "First period column (earlier)"},
+                "period_b": {"type": "string", "description": "Second period column (later)"},
+            },
+            "required": ["dimension", "period_a", "period_b"],
+        },
     },
     {
-        "name": "FILTER_SORT",
+        "name": "run_filter_and_sort",
         "description": "Optionally filter rows, then sort and limit",
-        "params": ["sort_col", "ascending", "limit", "filter_col?", "filter_val?"],
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sort_col": {"type": "string", "description": "Column to sort by"},
+                "ascending": {"type": "boolean", "description": "True for ascending"},
+                "limit": {"type": "integer", "description": "Row limit"},
+                "filter_col": {"type": "string", "description": "Optional filter column"},
+                "filter_val": {"type": "string", "description": "Optional filter value"},
+            },
+            "required": ["sort_col", "ascending", "limit"],
+        },
     },
     {
-        "name": "DESCRIBE",
-        "description": "Basic dataset summary of numeric columns",
-        "params": ["include?"],
+        "name": "run_describe",
+        "description": "Summarize numeric columns with count, mean, std, min, max",
+        "parameters": {"type": "object", "properties": {}},
     },
 ]

@@ -273,6 +273,88 @@ def _safe_response_text(resp) -> str:
         return ""
 
 
+def _extract_any_python_block(text: str) -> str:
+    """Extract any fenced python code block. If absent, any fenced block. Else raw text.
+
+    Returns code content without fences.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    m = re.search(r"```python\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```\s*(.*?)```", text, flags=re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def generate_presentational_code(
+    context: dict,
+    schema_snippet: str,
+    style: str = "educational",
+) -> str:
+    """Generate a human-readable, presentational pandas script.
+
+    Rules (STRICT):
+    - Do NOT define `def run(df, ctx)`; assume a DataFrame `df` already exists.
+    - Focus on table-oriented transformations answering the analysis intent.
+    - Do NOT include data loading/cleaning; end with: print(result_df.head()).
+    - Return only the code (no fences in the returned string).
+
+    Context must contain either:
+    - {"command": {...}} from fastpath, or
+    - {"question": "..."} from fallback.
+    """
+    model = _ensure_model()
+
+    if not isinstance(context, dict) or ("command" not in context and "question" not in context):
+        return "# Could not generate code: missing analysis context."
+
+    if "command" in context and context.get("command"):
+        try:
+            analysis_context = f"ANALYSIS COMMAND:\n{json.dumps(context['command'], indent=2, ensure_ascii=False)}"
+        except Exception:
+            analysis_context = "ANALYSIS COMMAND: [unavailable]"
+    else:
+        analysis_context = f"USER QUESTION:\n\"{str(context.get('question') or '').strip()}\""
+
+    base = (
+        "You are an expert Python data analyst writing a tutorial-style script.\n"
+        "Write a clean, self-contained pandas script that is easy for a beginner to understand.\n\n"
+        "--- STRICT RULES ---\n"
+        f"- Style: '{{style}}' (use clear variables and helpful comments).\n"
+        "- Do NOT define def run(df, ctx). Assume a pandas DataFrame named `df` already exists.\n"
+        "- Write only the transformation/aggregation logic relevant to the analysis.\n"
+        "- Do NOT include any data loading or cleaning steps.\n"
+        "- End the script by assigning the final table to `result_df` and then printing: print(result_df.head()).\n"
+    )
+
+    # Format only the base string (which contains the {style} token) to avoid
+    # interfering with JSON braces in the rest of the prompt.
+    base_filled = base.format(style=style)
+    prompt = (
+        f"{base_filled}\n"
+        f"--- DATASET SCHEMA (context) ---\n{schema_snippet}\n\n"
+        f"--- ANALYSIS TO REPRODUCE ---\n{analysis_context}\n\n"
+        "Return a single fenced Python code block."
+    )
+
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": 4096,
+                "temperature": 0.1,
+            },
+        )
+        text = _safe_response_text(resp)
+        code = _extract_any_python_block(text)
+        return code or "# No code generated."
+    except Exception:
+        return "# An error occurred while generating the code."
+
+
 # ---------------------------------------------------------------------------
 # JSON Extraction + Classifiers + Reconstruction
 # ---------------------------------------------------------------------------
@@ -338,7 +420,7 @@ def classify_intent(
         resp = model_with_tools.generate_content(
             prompt,
             generation_config={
-                "max_output_tokens": 512,
+                "max_output_tokens": 2048,
                 "temperature": 0.1,
             },
             tool_config={"function_calling_config": "ANY"},
@@ -379,7 +461,7 @@ def is_show_code_request(question: str) -> dict:
         "Answer with only a JSON object."
     )
     try:
-        resp = model.generate_content(prompt, generation_config={"max_output_tokens": 128, "temperature": 0.0})
+        resp = model.generate_content(prompt, generation_config={"max_output_tokens": 256, "temperature": 0.0})
         text = _safe_response_text(resp)
         js = _extract_json_block(text)
         if not js:

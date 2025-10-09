@@ -30,6 +30,7 @@ import analysis_toolkit
 import aliases
 from google.api_core import exceptions as gax_exceptions  # type: ignore
 import logging
+from functools import lru_cache
 
 # Configuration
 PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
@@ -147,12 +148,19 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     dataset_rows = int(dataset_meta.get("rows") or 0)
     column_names = list(dataset_meta.get("column_names") or (payload_obj.get("columns", {}) or {}).keys())
 
-    # --- Optional: Show Code Reconstruction Path ---
+    # --- Optional: Unified Presentational Code (Show Code) ---
+    @lru_cache(maxsize=32)
+    def _cached_presentational_code(mid: str, ctx_json: str, schema: str, style: str) -> str:
+        try:
+            ctx = json.loads(ctx_json)
+        except Exception:
+            ctx = {}
+        return gemini_client.generate_presentational_code(ctx, schema, style=style)
+
     try:
         if CODE_RECONSTRUCT_ENABLED:
             show_req = gemini_client.is_show_code_request(question)
             if isinstance(show_req, dict) and show_req.get("is_code_request") is True:
-                # Identify latest result folder and strategy
                 results_prefix = f"users/{uid}/sessions/{session_id}/results/"
                 latest_strategy_blob = None
                 for blob in storage_client.list_blobs(FILES_BUCKET, prefix=results_prefix):
@@ -160,51 +168,38 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         if latest_strategy_blob is None or (getattr(blob, "updated", None) and blob.updated > latest_strategy_blob.updated):
                             latest_strategy_blob = blob
                 if latest_strategy_blob is None:
-                    yield _sse_format({"type": "error", "data": {"code": "NO_PREV_COMMAND", "message": "No previous analysis found to reconstruct code."}})
+                    yield _sse_format({"type": "error", "data": {"code": "NO_PREV_ANALYSIS", "message": "No previous analysis found to reconstruct."}})
                     return
-                # Determine strategy and messageId path
-                strategy_json = json.loads(latest_strategy_blob.download_as_text())
-                strategy = (strategy_json or {}).get("strategy") or ""
+                strategy_obj = json.loads(latest_strategy_blob.download_as_text()) or {}
                 result_dir = latest_strategy_blob.name.rsplit("/", 1)[0]
+                message_id_prev = result_dir.split("/")[-1]
 
-                if strategy == "fastpath":
-                    # Use command.json to reconstruct deterministic code
-                    cmd_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/command.json")
-                    if not cmd_blob.exists():
-                        yield _sse_format({"type": "error", "data": {"code": "NO_PREV_COMMAND", "message": "No command metadata found to reconstruct code."}})
-                        return
-                    cmd = json.loads(cmd_blob.download_as_text())
-                    tool = cmd.get("intent") or "DESCRIBE"
-                    params = cmd.get("params") or {}
-                    code_text = gemini_client.reconstruct_code_from_tool_call(tool, params, schema_snippet)
-                    yield _sse_format({
-                        "type": "code",
-                        "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
-                    })
-                    return
+                context: dict = {}
+                if isinstance(strategy_obj.get("command"), dict):
+                    context = {"command": strategy_obj.get("command")}
+                elif isinstance(strategy_obj.get("question"), str) and strategy_obj.get("question").strip():
+                    context = {"question": strategy_obj.get("question")}
                 else:
-                    # Fallback: synthesize presentational code using last executed code as context if available
-                    ref_code = ""
-                    ref_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/fallback_exec_code.py")
-                    if ref_blob.exists():
+                    # Back-compat: try command.json
+                    cmd_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/command.json")
+                    if cmd_blob.exists():
                         try:
-                            ref_code = ref_blob.download_as_text()
+                            context = {"command": json.loads(cmd_blob.download_as_text())}
                         except Exception:
-                            ref_code = ""
-                    code_text = gemini_client.reconstruct_presentational_code(
-                        question=question,
-                        schema_snippet=schema_snippet,
-                        sample_rows=sample_rows,
-                        last_exec_code=ref_code,
-                    )
-                    if not code_text:
-                        yield _sse_format({"type": "error", "data": {"code": "RECONSTRUCT_FAILED", "message": "Could not reconstruct code for the last analysis."}})
-                        return
-                    yield _sse_format({
-                        "type": "code",
-                        "data": {"language": "python", "text": code_text, "warnings": [], "source": "reconstruction"}
-                    })
+                            context = {}
+
+                if not context:
+                    yield _sse_format({"type": "error", "data": {"code": "NO_CONTEXT", "message": "Could not find the context for the previous analysis."}})
                     return
+
+                style = os.getenv("PRESENTATIONAL_CODE_STYLE", "educational")
+                ctx_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
+                code_text = _cached_presentational_code(message_id_prev, ctx_json, schema_snippet, style)
+                yield _sse_format({
+                    "type": "code",
+                    "data": {"language": "python", "text": code_text, "warnings": [], "source": "presentation"}
+                })
+                return
     except Exception:
         # Non-fatal; continue with normal flow
         pass
@@ -410,17 +405,22 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
                         chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
                         summary_data = json.dumps({"text": summary_text}, ensure_ascii=False).encode("utf-8")
-                        command_data = json.dumps({
+                        command_obj = {
                             "intent": intent,
                             "params": resolved_params,
                             "confidence": confidence,
                             "toolkitVersion": TOOLKIT_VERSION,
-                        }, ensure_ascii=False).encode("utf-8")
-                        strategy_data = json.dumps({
+                        }
+                        command_data = json.dumps(command_obj, ensure_ascii=False).encode("utf-8")
+                        strategy_obj = {
                             "strategy": "fastpath",
                             "version": TOOLKIT_VERSION,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }, ensure_ascii=False).encode("utf-8")
+                            "messageId": message_id,
+                            "question": question,
+                            "command": command_obj,
+                        }
+                        strategy_data = json.dumps(strategy_obj, ensure_ascii=False).encode("utf-8")
 
                         with ThreadPoolExecutor(max_workers=6) as executor:
                             futures = [
@@ -657,11 +657,14 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         summary_data = json.dumps({"text": summary}, ensure_ascii=False).encode("utf-8")
         
         # Upload in parallel (do not expose exec code URL)
-        strategy_data = json.dumps({
+        strategy_obj = {
             "strategy": "fallback",
             "version": TOOLKIT_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        }, ensure_ascii=False).encode("utf-8")
+            "messageId": message_id,
+            "question": question,
+        }
+        strategy_data = json.dumps(strategy_obj, ensure_ascii=False).encode("utf-8")
 
         with ThreadPoolExecutor(max_workers=6) as executor:
             futures = [

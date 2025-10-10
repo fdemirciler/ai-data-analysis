@@ -31,6 +31,7 @@ import aliases
 from google.api_core import exceptions as gax_exceptions  # type: ignore
 import logging
 from functools import lru_cache
+import re
 
 # Configuration
 PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
@@ -147,6 +148,48 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
     dataset_meta = payload_obj.get("dataset", {}) or {}
     dataset_rows = int(dataset_meta.get("rows") or 0)
     column_names = list(dataset_meta.get("column_names") or (payload_obj.get("columns", {}) or {}).keys())
+    columns_schema = payload_obj.get("columns", {}) or {}
+
+    # --- Router helpers: DESCRIBE lexicon and multi-metric detection ---
+    def _is_describe_like(q: str) -> bool:
+        if not isinstance(q, str) or not q:
+            return False
+        ql = q.lower()
+        # Expanded lexicon per decision
+        lex = ["describe", "summary", "summarize", "overview", "stats", "schema", "fields"]
+        has_keyword = any(re.search(rf"\b{re.escape(tok)}\b", ql) for tok in lex)
+        has_grouping = bool(re.search(r"\b(by|per)\b", ql))
+        return has_keyword and not has_grouping
+
+    def _is_multi_metric_request(q: str, col_names: list[str], cols_schema: dict) -> bool:
+        if not isinstance(q, str) or not q:
+            return False
+        ql = q.lower()
+        # Heuristic: mentions average/mean and has conjunctions and grouping cue
+        pattern_avg = bool(re.search(r"\b(avg|average|mean)\b", ql))
+        pattern_multi = bool(re.search(r"\b(and)\b|,", ql))
+        pattern_group = bool(re.search(r"\b(by|per)\b", ql))
+
+        # Column resolution: count unique resolved columns referenced in question
+        tokens = re.findall(r"[a-zA-Z0-9_]+", ql)
+        resolved: set[str] = set()
+        for t in tokens:
+            col = aliases.resolve_column(t, col_names)
+            if col:
+                # Optionally check numeric-ish types if provided in schema
+                meta = (cols_schema or {}).get(col, {})
+                dtype = str(meta.get("dtype") or meta.get("type") or "").lower()
+                if dtype:
+                    if any(k in dtype for k in ["int", "float", "number", "numeric", "double", "decimal"]):
+                        resolved.add(col)
+                    else:
+                        # If dtype present but non-numeric, skip
+                        continue
+                else:
+                    # If no dtype info, still count the resolved column
+                    resolved.add(col)
+
+        return (pattern_avg and pattern_multi and pattern_group) or (len(resolved) >= 2 and pattern_group)
 
     # --- Optional: Unified Presentational Code (Show Code) ---
     @lru_cache(maxsize=32)
@@ -287,11 +330,44 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
         params_ok, resolved_params = _validate_and_resolve(intent, params)
 
-        # Soft-accept logic
-        soft_threshold = max(0.0, MIN_FASTPATH_CONFIDENCE - 0.15)
-        is_fastpath_candidate = (intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT", "DESCRIBE"}) and (
-            confidence >= MIN_FASTPATH_CONFIDENCE or (params_ok and confidence >= soft_threshold)
-        )
+        # Soft-accept logic (stricter): require params_ok for ANY fastpath, keep tighter soft threshold
+        soft_threshold = max(0.0, MIN_FASTPATH_CONFIDENCE - 0.10)
+        is_fastpath_candidate = False
+
+        if intent == "DESCRIBE":
+            # DESCRIBE: only when clearly a describe-like request, never if grouping cues present
+            is_fastpath_candidate = (
+                params_ok
+                and _is_describe_like(question)
+                and (confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold)
+            )
+            if not is_fastpath_candidate:
+                try:
+                    logging.info(json.dumps({
+                        "event": "router_decision",
+                        "strategy": "fallback",
+                        "intent": intent,
+                        "reason": "describe_not_clear"
+                    }))
+                except Exception:
+                    pass
+        elif intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT"}:
+            # Capability guard for AGGREGATE: multi-metric grouped tables require fallback
+            if intent == "AGGREGATE" and _is_multi_metric_request(question, column_names, columns_schema):
+                is_fastpath_candidate = False
+                try:
+                    logging.info(json.dumps({
+                        "event": "router_decision",
+                        "strategy": "fallback",
+                        "intent": intent,
+                        "reason": "multi_metric_guard"
+                    }))
+                except Exception:
+                    pass
+            else:
+                is_fastpath_candidate = params_ok and (
+                    confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold
+                )
 
         # Optional SSE for debugging (no data rows logged)
         if os.getenv("LOG_CLASSIFIER_RESPONSE") == "1":
@@ -376,7 +452,18 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                     else:
                         res_df = analysis_toolkit.run_describe(df)
 
-                    summary_obj = gemini_client.format_final_response(question, res_df)
+                    # Summarization with timeout for resilience
+                    summary_obj = {}
+                    try:
+                        with ThreadPoolExecutor(max_workers=1) as ex:
+                            fut = ex.submit(gemini_client.format_final_response, question, res_df)
+                            summary_obj = fut.result(timeout=15)
+                    except Exception as e:
+                        try:
+                            logging.warning(f"Summarization call failed or timed out: {e}")
+                        except Exception:
+                            pass
+                        summary_obj = {"summary": "The analysis is complete. Please review the data below."}
                     summary_text = summary_obj.get("summary") or ""
                     table_rows = res_df.head(50).to_dict(orient="records")
                     metrics = {"rows": int(getattr(res_df, "shape", [0, 0])[0] or 0),

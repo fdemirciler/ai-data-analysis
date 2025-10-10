@@ -18,6 +18,10 @@ ALIASES: Dict[str, str] = {
     "cat": "category",
     "dept": "department",
     "seg": "segment",
+    # cost-related terms (dataset-specific mappings)
+    "input": "input_cost",
+    "output": "output_cost",
+    "cost": "total_cost",
 }
 
 

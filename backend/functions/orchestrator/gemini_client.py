@@ -408,8 +408,12 @@ def classify_intent(
     hint_block = (hinting or "").strip()
 
     prompt = (
-        "Determine which analysis function best answers the question using the schema.\n"
-        "If no tool applies, do not call any function.\n\n"
+        "You are a meticulous data analysis router. Your job is to determine if a user's question can be answered by a SINGLE tool call from the provided list.\n"
+        "If the question is ambiguous, requires multiple steps, or combines tasks such that a single tool call cannot fully answer it, you MUST NOT call any function.\n\n"
+        "STRICT RULES:\n"
+        "- Only call a tool if one call can fully and accurately answer the entire question.\n"
+        "- AGGREGATE supports exactly one metric. If the user asks for multiple metrics in one grouped table, DO NOT call any function.\n"
+        "- If unsure, do not call any function.\n\n"
         f"SCHEMA (truncated):\n{schema_snippet}\n\n"
         f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"
         f"HINTS:\n{hint_block}\n\n"
@@ -421,7 +425,7 @@ def classify_intent(
             prompt,
             generation_config={
                 "max_output_tokens": 2048,
-                "temperature": 0.1,
+                "temperature": 0.0,
             },
             tool_config={"function_calling_config": "ANY"},
         )

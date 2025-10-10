@@ -43,7 +43,7 @@ export function ChatSidebar({
       <aside
         className={cn(
           "fixed left-0 top-0 h-full bg-sidebar border-r border-sidebar-border transition-all duration-300 flex flex-col z-40",
-          isOpen ? "w-64" : "w-1"
+          isOpen ? "w-64" : "w-12 ml-1" // ← 48px wide + 4px margin from left edge
         )}
       >
         {isOpen ? (
@@ -125,7 +125,7 @@ export function ChatSidebar({
                   <div className="text-xs text-muted-foreground">{userPlan}</div>
                 </div>
               </div>
-              
+
               {/* Daily Limit */}
               <div className="mt-3 px-3 py-2 rounded-lg bg-sidebar-accent/30">
                 <div className="text-xs text-muted-foreground mb-1">Daily Limit</div>
@@ -138,11 +138,12 @@ export function ChatSidebar({
         ) : (
           <>
             {/* Header - Collapsed */}
-            <div className="p-2 flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-2 py-3">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={onToggle}
+                className="h-9 w-9"
               >
                 <PanelLeft className="h-5 w-5" />
               </Button>
@@ -151,17 +152,19 @@ export function ChatSidebar({
                 size="icon"
                 onClick={onNewChat}
                 title="New chat"
+                className="h-9 w-9"
               >
                 <SquarePen className="h-5 w-5" />
               </Button>
             </div>
 
             {/* Recent Chats Icon - Collapsed */}
-            <div className="p-2 flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-2 py-2">
               <Button
                 variant="ghost"
                 size="icon"
                 title="Recent Chats"
+                className="h-9 w-9"
               >
                 <History className="h-5 w-5" />
               </Button>
@@ -170,11 +173,12 @@ export function ChatSidebar({
             <div className="flex-1" />
 
             {/* User Profile - Collapsed */}
-            <div className="border-t border-sidebar-border p-2 flex flex-col items-center gap-2">
+            <div className="border-t border-sidebar-border py-3 flex flex-col items-center">
               <Button
                 variant="ghost"
                 size="icon"
                 title={`${userName} (${userPlan})`}
+                className="h-9 w-9"
               >
                 <div className="w-6 h-6 rounded-full bg-sidebar-primary flex items-center justify-center text-sidebar-primary-foreground text-xs">
                   {userName.charAt(0).toUpperCase()}

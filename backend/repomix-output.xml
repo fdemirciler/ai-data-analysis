@@ -1,0 +1,3262 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+aliases.py
+analysis_toolkit.py
+gemini_client.py
+main.py
+requirements.txt
+sandbox_runner.py
+tests/test_aliases.py
+tests/test_analysis_toolkit.py
+tests/test_gemini_client.py
+tests/test_main.py
+tests/test_sandbox_runner.py
+tests/test_worker.py
+worker.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="aliases.py">
+"""
+Column alias resolution utilities for classifier robustness.
+"""
+from __future__ import annotations
+
+from typing import Dict, Iterable
+import difflib
+
+# Lightweight alias dictionary; extend as needed
+ALIASES: Dict[str, str] = {
+    # business metrics
+    "profit": "revenue_diff",
+    "sales": "revenue",
+    "rev": "revenue",
+    "qty": "quantity",
+    "count": "quantity",
+    # dimensions
+    "cat": "category",
+    "dept": "department",
+    "seg": "segment",
+    # cost-related terms (dataset-specific mappings)
+    "input": "input_cost",
+    "output": "output_cost",
+    "cost": "total_cost",
+}
+
+
+def resolve_column(name: str, columns: Iterable[str]) -> str | None:
+    """Resolve a user-provided or aliased column name to the actual dataset column.
+
+    Attempts exact match, alias map, then fuzzy match using difflib.
+    Returns the best guess or None if resolution fails.
+    """
+    cols = list(columns)
+    if not name:
+        return None
+    # exact
+    if name in cols:
+        return name
+    # alias
+    alias = ALIASES.get(name.lower())
+    if alias and alias in cols:
+        return alias
+    # fuzzy
+    m = difflib.get_close_matches(name, cols, n=1, cutoff=0.8)
+    if m:
+        return m[0]
+    return None
+</file>
+
+<file path="analysis_toolkit.py">
+"""
+Analysis toolkit for fast-path deterministic operations.
+
+Tools:
+- AGGREGATE: group by a dimension and aggregate a numeric metric with a function
+- VARIANCE: compare two period columns aggregated by a dimension
+- FILTER_SORT (legacy): optional filter then sort with limit (delegates to FILTER + SORT)
+- DESCRIBE: basic dataset summary of numeric columns
+
+- FILTER: filter rows based on conditions
+- SORT: stable sort by a column with an optional limit
+- VALUE_COUNTS: frequency table for a column
+- TOP_N_PER_GROUP: top/bottom N per group based on a metric
+- PIVOT: pivot table across two categorical dimensions
+- PERCENTILE: p-th percentile of a numeric column
+- OUTLIERS: rows where a numeric column is an outlier (IQR or z-score)
+
+All functions return a pandas.DataFrame.
+"""
+from __future__ import annotations
+
+from typing import List, Optional, Any, Dict
+import pandas as pd
+import numpy as np
+
+
+TOOLKIT_VERSION = 2
+
+
+class ToolkitError(RuntimeError):
+    """Custom exception for toolkit errors to provide clean, user-facing messages."""
+    pass
+
+
+def _require_columns(df: pd.DataFrame, *cols: str) -> None:
+    """Raise ToolkitError if any required columns are missing."""
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ToolkitError(f"Missing required column(s): {', '.join(missing)}")
+
+
+def safe_numeric_cast(series: pd.Series, errors: str = "coerce") -> pd.Series:
+    """Safely cast a series to numeric, replacing non-finite values (inf/-inf) with NaN."""
+    s = pd.to_numeric(series, errors=errors)
+    return s.replace([np.inf, -np.inf], np.nan)
+
+
+def run_aggregation(df: pd.DataFrame, dimension: str, metric: str, func: str) -> pd.DataFrame:
+    """Aggregate metric by dimension using func in {sum, mean, avg, count, max, min}."""
+    if func.lower() == "avg":
+        agg_func = "mean"
+    else:
+        agg_func = func.lower()
+    if agg_func not in {"sum", "mean", "count", "max", "min"}:
+        raise ValueError(f"Unsupported aggregate function: {func}")
+
+    if metric not in df.columns or dimension not in df.columns:
+        raise KeyError("Missing required columns for aggregation")
+
+    df2 = df[[dimension, metric]].copy()
+    df2[metric] = safe_numeric_cast(df2[metric])
+    grouped = df2.groupby(dimension, dropna=False)[metric].agg(agg_func).reset_index()
+    grouped.columns = [dimension, f"{metric}_{agg_func}"]
+    return grouped.sort_values(by=grouped.columns[1], ascending=False, kind="mergesort").reset_index(drop=True)
+
+
+def run_variance(df: pd.DataFrame, dimension: str, period_a: str, period_b: str) -> pd.DataFrame:
+    """Compare two numeric period columns aggregated by dimension. Returns delta and pct_change."""
+    for col in (dimension, period_a, period_b):
+        if col not in df.columns:
+            raise KeyError(f"Missing required column: {col}")
+    df2 = df[[dimension, period_a, period_b]].copy()
+    df2[period_a] = safe_numeric_cast(df2[period_a])
+    df2[period_b] = safe_numeric_cast(df2[period_b])
+    grouped = df2.groupby(dimension, dropna=False).agg({period_a: "sum", period_b: "sum"}).reset_index()
+    grouped["delta"] = grouped[period_b] - grouped[period_a]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        grouped["pct_change"] = (grouped["delta"] / grouped[period_a]).replace([np.inf, -np.inf], np.nan) * 100.0
+    return grouped.sort_values(by="delta", ascending=False, kind="mergesort").reset_index(drop=True)
+
+
+def run_filter_and_sort(
+    df: pd.DataFrame,
+    sort_col: str,
+    ascending: bool,
+    limit: int,
+    filter_col: Optional[str] = None,
+    filter_val: Optional[str] = None,
+) -> pd.DataFrame:
+    """Optionally filter rows, then sort by sort_col and limit (legacy wrapper)."""
+    if sort_col not in df.columns:
+        raise KeyError(f"Missing sort column: {sort_col}")
+
+    dff = df
+    # Delegate filtering to new filter_rows if a filter is specified
+    if filter_col is not None and filter_val is not None:
+        if filter_col not in df.columns:
+            raise KeyError(f"Missing filter column: {filter_col}")
+        filters = [{"column": filter_col, "operator": "eq", "value": filter_val}]
+        dff = filter_rows(df, filters=filters)
+
+    # Delegate sorting (with limit) to new sort_rows
+    dff = sort_rows(dff, sort_by_column=sort_col, ascending=ascending, limit=limit)
+    return dff
+
+
+def run_describe(df: pd.DataFrame, include: str = "number") -> pd.DataFrame:
+    """Describe numeric columns by default."""
+    if include == "all":
+        desc = df.describe(include="all").transpose()
+    else:
+        desc = df.select_dtypes(include=["number"]).describe().transpose()
+    desc = desc.reset_index().rename(columns={"index": "column"})
+    return desc
+
+
+# ----------------------- New deterministic verbs (v2) -----------------------
+
+def filter_rows(df: pd.DataFrame, filters: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Filter rows using a list of conditions (AND logic across filters).
+
+    Each filter item: {"column": str, "operator": str, "value": Any}
+    Operators: eq, neq, gt, gte, lt, lte, is_in, contains (contains uses regex=False).
+    """
+    dff = df
+    allowed = {"eq", "neq", "gt", "gte", "lt", "lte", "is_in", "contains"}
+    for f in filters or []:
+        col = f.get("column")
+        op = str(f.get("operator") or "").lower()
+        val = f.get("value")
+        _require_columns(dff, col)
+        if op not in allowed:
+            raise ToolkitError(f"Unsupported operator: {op}")
+
+        series = dff[col]
+        if op in {"gt", "gte", "lt", "lte"}:
+            series = safe_numeric_cast(series)
+            try:
+                num_val = float(val)
+            except Exception:
+                num_val = np.nan
+            if op == "gt":
+                dff = dff[series > num_val]
+            elif op == "gte":
+                dff = dff[series >= num_val]
+            elif op == "lt":
+                dff = dff[series < num_val]
+            else:  # lte
+                dff = dff[series <= num_val]
+        elif op == "eq":
+            dff = dff[series.astype(str) == str(val)]
+        elif op == "neq":
+            dff = dff[series.astype(str) != str(val)]
+        elif op == "is_in":
+            values = val if isinstance(val, (list, tuple, set)) else [val]
+            dff = dff[series.astype(str).isin([str(v) for v in values])]
+        elif op == "contains":
+            dff = dff[series.astype(str).str.contains(str(val), na=False, regex=False)]
+    return dff.reset_index(drop=True)
+
+
+def sort_rows(df: pd.DataFrame, sort_by_column: str, ascending: bool = False, limit: int = 0) -> pd.DataFrame:
+    """Stable sort by a column and optionally limit the number of rows."""
+    _require_columns(df, sort_by_column)
+    dff = df.sort_values(by=sort_by_column, ascending=ascending, kind="mergesort")
+    if limit and limit > 0:
+        dff = dff.head(int(limit))
+    return dff.reset_index(drop=True)
+
+
+def value_counts(df: pd.DataFrame, column: str, top: int = 100, include_pct: bool = True) -> pd.DataFrame:
+    """Frequency table of a column with optional percentage; clamps top to [1..10000]."""
+    _require_columns(df, column)
+    try:
+        top_int = int(top)
+    except Exception:
+        top_int = 100
+    top_int = max(1, min(10000, top_int))
+    counts = df[column].value_counts(dropna=False).head(top_int).reset_index()
+    counts.columns = [column, "count"]
+    if include_pct:
+        total = max(1, len(df))
+        counts["pct"] = (counts["count"] / total * 100).round(2)
+    return counts.reset_index(drop=True)
+
+
+def top_n_per_group(df: pd.DataFrame, group_by_column: str, metric_column: str, n: int = 5, ascending: bool = False) -> pd.DataFrame:
+    """Returns the top or bottom N rows for each group based on a metric."""
+    _require_columns(df, group_by_column, metric_column)
+    df2 = df.copy()
+    df2[metric_column] = safe_numeric_cast(df2[metric_column])
+    out = (
+        df2.sort_values(by=metric_column, ascending=ascending)
+        .groupby(group_by_column, dropna=False)
+        .head(int(n))
+        .reset_index(drop=True)
+    )
+    return out
+
+
+def pivot_table(df: pd.DataFrame, index: str, columns: str, values: str, aggfunc: str = "sum") -> pd.DataFrame:
+    """Creates a pivot table summarizing a numeric values column across two categorical dimensions."""
+    if df.empty:
+        return df.copy()
+    _require_columns(df, index, columns, values)
+    df2 = df.copy()
+    df2[values] = safe_numeric_cast(df2[values])
+    pivot = df2.pivot_table(index=index, columns=columns, values=values, aggfunc=aggfunc, fill_value=0)
+    return pivot.reset_index()
+
+
+def percentile(df: pd.DataFrame, column: str, p: Any) -> pd.DataFrame:
+    """Single-row DataFrame with the p-th percentile of a numeric column (0 ≤ p ≤ 100)."""
+    _require_columns(df, column)
+    try:
+        p_float = float(p)
+    except Exception:
+        raise ToolkitError("Percentile 'p' must be a number")
+    if not (0.0 <= p_float <= 100.0):
+        raise ToolkitError("Percentile 'p' must be between 0 and 100")
+    s = safe_numeric_cast(df[column])
+    val = float(np.nanpercentile(s.to_numpy(dtype=float), p_float))
+    return pd.DataFrame({f"{column}_p{int(p_float) if p_float.is_integer() else p_float}": [val]})
+
+
+def outliers(df: pd.DataFrame, column: str, method: str = "iqr", k: Any = 1.5) -> pd.DataFrame:
+    """Return rows whose column is an outlier using IQR or z-score method."""
+    _require_columns(df, column)
+    s = safe_numeric_cast(df[column])
+    try:
+        kf = float(k)
+    except Exception:
+        kf = 1.5
+    method_l = (method or "iqr").lower()
+    if method_l == "iqr":
+        q1, q3 = np.nanpercentile(s.to_numpy(dtype=float), [25, 75])
+        iqr = q3 - q1
+        mask = (s < (q1 - kf * iqr)) | (s > (q3 + kf * iqr))
+    else:  # zscore
+        mu = float(np.nanmean(s.to_numpy(dtype=float)))
+        sigma = float(np.nanstd(s.to_numpy(dtype=float))) or np.nan
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z = (s - mu) / sigma
+        mask = np.abs(z) > kf
+    return df[mask].reset_index(drop=True)
+
+
+# Tools spec for Gemini native function-calling (snake_case)
+TOOLS_SPEC = [
+    {
+        "name": "run_aggregation",
+        "description": "Group by a dimension and aggregate a numeric metric with a function",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dimension": {"type": "string", "description": "Column to group by"},
+                "metric": {"type": "string", "description": "Numeric column to aggregate"},
+                "func": {"type": "string", "enum": ["sum", "mean", "count", "max", "min"], "description": "Aggregation function"},
+            },
+            "required": ["dimension", "metric", "func"],
+        },
+    },
+    {
+        "name": "run_variance",
+        "description": "Calculate difference and % change between two numeric period columns grouped by a dimension",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dimension": {"type": "string", "description": "Group key column"},
+                "period_a": {"type": "string", "description": "First period column (earlier)"},
+                "period_b": {"type": "string", "description": "Second period column (later)"},
+            },
+            "required": ["dimension", "period_a", "period_b"],
+        },
+    },
+    {
+        "name": "run_filter_and_sort",
+        "description": "Optionally filter rows, then sort and limit (legacy; delegates to FILTER + SORT)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sort_col": {"type": "string", "description": "Column to sort by"},
+                "ascending": {"type": "boolean", "description": "True for ascending"},
+                "limit": {"type": "integer", "description": "Row limit"},
+                "filter_col": {"type": "string", "description": "Optional filter column"},
+                "filter_val": {"type": "string", "description": "Optional filter value"},
+            },
+            "required": ["sort_col", "ascending", "limit"],
+        },
+    },
+    {
+        "name": "run_describe",
+        "description": "Summarize numeric columns with count, mean, std, min, max",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    # New tools (v2)
+    {
+        "name": "filter_rows",
+        "description": "Filter rows based on a list of conditions (AND across filters).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string"},
+                            "operator": {"type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "is_in", "contains"]},
+                            "value": {}
+                        },
+                        "required": ["column", "operator", "value"]
+                    }
+                }
+            },
+            "required": ["filters"]
+        }
+    },
+    {
+        "name": "sort_rows",
+        "description": "Stable sort by a column with optional limit.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sort_by_column": {"type": "string"},
+                "ascending": {"type": "boolean", "default": False},
+                "limit": {"type": "integer", "minimum": 0, "default": 0}
+            },
+            "required": ["sort_by_column"]
+        }
+    },
+    {
+        "name": "value_counts",
+        "description": "Frequency table for a column (optionally with percentage).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "column": {"type": "string"},
+                "top": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
+                "include_pct": {"type": "boolean", "default": True}
+            },
+            "required": ["column"]
+        }
+    },
+    {
+        "name": "top_n_per_group",
+        "description": "Top or bottom N rows within each group based on a metric.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "group_by_column": {"type": "string"},
+                "metric_column": {"type": "string"},
+                "n": {"type": "integer", "minimum": 1, "default": 5},
+                "ascending": {"type": "boolean", "default": False}
+            },
+            "required": ["group_by_column", "metric_column"]
+        }
+    },
+    {
+        "name": "pivot_table",
+        "description": "Pivot a numeric values column across two categorical dimensions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "string"},
+                "columns": {"type": "string"},
+                "values": {"type": "string"},
+                "aggfunc": {"type": "string", "enum": ["sum", "mean", "median", "count"], "default": "sum"}
+            },
+            "required": ["index", "columns", "values"]
+        }
+    },
+    {
+        "name": "percentile",
+        "description": "Compute the p-th percentile (0..100) for a numeric column.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "column": {"type": "string"},
+                "p": {"type": "number", "minimum": 0, "maximum": 100}
+            },
+            "required": ["column", "p"]
+        }
+    },
+    {
+        "name": "outliers",
+        "description": "Rows where a numeric column is an outlier by IQR or z-score.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "column": {"type": "string"},
+                "method": {"type": "string", "enum": ["iqr", "zscore"], "default": "iqr"},
+                "k": {"type": "number", "default": 1.5}
+            },
+            "required": ["column"]
+        }
+    },
+]
+</file>
+
+<file path="gemini_client.py">
+from __future__ import annotations
+
+import os
+import re
+import json
+from typing import Any, Dict, List
+
+import pandas as pd
+import google.generativeai as genai
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+_MODEL_NAME = "gemini-2.5-flash"  # As requested
+_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+_MAX_TOKENS = 4096
+_TEMPERATURE = 0.2
+
+_configured = False
+_model = None
+
+
+def _ensure_model():
+    """Ensure the Gemini client is configured and return the model."""
+    global _configured, _model
+    if not _configured:
+        if not _API_KEY:
+            raise RuntimeError("GEMINI_API_KEY not set")
+        genai.configure(api_key=_API_KEY)
+        _model = genai.GenerativeModel(_MODEL_NAME)
+        _configured = True
+    return _model
+
+
+# ---------------------------------------------------------------------------
+# Core: Generate Analysis Code
+# ---------------------------------------------------------------------------
+
+def generate_analysis_code(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict],
+    row_limit: int = 200
+) -> str:
+    """
+    Ask Gemini to produce Python code, with a one-time auto-repair attempt.
+    This function is primarily used for the repair loop.
+    """
+    model = _ensure_model()
+    sample_preview = sample_rows[: min(len(sample_rows), 10)]
+
+    prompt = (
+        "You are an expert Python data analyst. Write a single Python function "
+        "`def run(df, ctx):` to answer the user's question about the dataset.\n\n"
+        "OUTPUT RULES (STRICT):\n"
+        "- Return ONLY one fenced Python code block starting with ```python.\n"
+        "- The function MUST return a dict with EXACT keys: 'table' (list of dict rows answering the question),\n"
+        "  'metrics' (dict of key figures), and 'chartData' (object with keys: 'kind', 'labels', 'series' = list of {label, data}).\n"
+        "- Do NOT return 'tables' or 'charts' keys. Use 'table' and 'chartData' only.\n"
+        "- Respect ctx.get('row_limit', 200) when returning 'table'.\n"
+        "- Use robust numeric handling: prefer pd.to_numeric(..., errors='coerce') and select_dtypes(include=[np.number]) for stats.\n"
+        "- Never use complex dtype or astype(complex).\n"
+        "- If a chart is appropriate, populate 'chartData' with non-empty labels and numeric series; else return empty {}.\n"
+        "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
+        "itertools, functools, collections, re, datetime, base64.\n\n"
+        f"SCHEMA:\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS:\n{sample_preview}\n\n"
+        f"USER QUESTION:\n\"{question}\"\n\n"
+        "Return only the fenced Python code block now."
+    )
+
+    resp = model.generate_content(
+        prompt,
+        generation_config={
+            "max_output_tokens": _MAX_TOKENS,
+            "temperature": _TEMPERATURE,
+        },
+    )
+
+    text = _safe_response_text(resp)
+    code = _extract_code_block(text)
+
+    # Accept 'def run (df, ctx):' with arbitrary whitespace
+    if not code or not re.search(r"def\s+run\s*\(", code):
+        raise RuntimeError("CODEGEN_FAILED: Missing valid 'def run(df, ctx):' implementation.")
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Generate Summary
+# ---------------------------------------------------------------------------
+
+def generate_summary(
+    question: str,
+    table_head: list[dict],
+    metrics: dict,
+    code: str | None = None
+) -> str:
+    """Generate a concise, data-driven summary from analysis results."""
+    model = _ensure_model()
+    preview = table_head[: min(len(table_head), 5)]
+
+    prompt = (
+        "You are a financial data analyst. Interpret the analysis results below. "
+        "Focus on trends, anomalies, or key figures; do NOT describe the code.\n\n"
+        f"USER QUESTION: \"{question}\"\n\n"
+        f"TABLE PREVIEW:\n{preview}\n\n"
+        f"KEY METRICS:\n{metrics}\n\n"
+        "Now write a one-paragraph interpretation of the data:"
+    )
+
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": _MAX_TOKENS,
+                "temperature": _TEMPERATURE,
+            },
+        )
+        text = _safe_response_text(resp).strip()
+        if text:
+            return text
+    except Exception:
+        # Fallthrough to generate a fallback summary if API fails
+        pass
+
+    # Fallback: minimal textual info if API fails or returns empty
+    parts = []
+    if question: parts.append(f"Question: {question}")
+    if metrics: parts.append(f"Metrics: {list(metrics.keys())[:5]}")
+    return " ".join(parts) or "No textual summary available."
+
+
+# ---------------------------------------------------------------------------
+# Fused: Generate Code + Summary in a Single Call
+# ---------------------------------------------------------------------------
+
+def generate_code_and_summary(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict],
+    row_limit: int = 200
+) -> tuple[str, str]:
+    """
+    Return (code, summary) using a single Gemini call, with a one-time repair loop.
+    """
+    fused = os.getenv("GEMINI_FUSED", "0").lower() not in ("0", "false", "no")
+    if not fused:
+        code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
+        return code, "Analysis planned. Executed results will follow."
+
+    model = _ensure_model()
+    sample_preview = sample_rows[: min(len(sample_rows), 10)]
+
+    prompt = (
+        "You are an expert Python data analyst.\n\n"
+        "Provide one fenced Python code block implementing `def run(df, ctx):`.\n\n"
+        "CODE REQUIREMENTS (STRICT):\n"
+        "- MUST return a dict with EXACT keys: 'table' (list[dict]), 'metrics' (dict), 'chartData' (kind, labels, series).\n"
+        "- Do NOT return 'tables' or 'charts'.\n"
+        "- Respect ctx.get('row_limit', 200). Use robust numeric handling; avoid complex dtype.\n"
+        "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
+        "itertools, functools, collections, re, datetime, base64.\n\n"
+        f"--- DATA CONTEXT ---\nSchema: {schema_snippet}\nSample rows: {sample_preview}\n\n"
+        f"--- QUESTION ---\n\"{question}\"\n\n"
+        "Return only the Python code block."
+    )
+
+    resp = model.generate_content(
+        prompt,
+        generation_config={
+            "max_output_tokens": _MAX_TOKENS,
+            "temperature": _TEMPERATURE,
+        },
+    )
+
+    text = _safe_response_text(resp)
+    code = _extract_code_block(text)
+    
+    # One-time repair attempt if initial extraction fails
+    if not code:
+        feedback_prompt = (
+            "Your previous response was not formatted correctly. "
+            f"Please regenerate the response for the following question: \"{question}\"\n\n"
+            "Return a one-sentence summary, then a single, valid, fenced Python code block "
+            "defining `def run(df, ctx):`."
+        )
+        retry_resp = model.generate_content(
+            feedback_prompt,
+            generation_config={
+                "max_output_tokens": _MAX_TOKENS,
+                "temperature": 0.0, # Use 0 temp for deterministic repair
+            },
+        )
+        text = _safe_response_text(retry_resp)
+        code = _extract_code_block(text)
+
+    # If code extraction still fails, return the raw text for the orchestrator's repair loop.
+    if not code:
+        return "", text
+
+    summary = "Analysis planned. Executed results will follow."
+    return code, summary
+
+
+# ---------------------------------------------------------------------------
+# Repair Code given Runtime Error
+# ---------------------------------------------------------------------------
+
+def repair_code(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict],
+    previous_code: str,
+    runtime_error: str,
+    row_limit: int = 200,
+) -> str:
+    """Ask Gemini to repair previously generated code given a runtime error message."""
+    model = _ensure_model()
+    sample_preview = sample_rows[: min(len(sample_rows), 10)]
+
+    prompt = (
+        "You previously wrote Python analysis code which raised a runtime error. "
+        "Repair the code. Maintain the same intent, and follow these strict rules.\n\n"
+        "RULES (STRICT):\n"
+        "- Implement `def run(df, ctx):` and return a dict with EXACT keys: 'table' (list[dict]), 'metrics' (dict), 'chartData'.\n"
+        "- Do NOT return 'tables' or 'charts'. Use 'table' and 'chartData' only.\n"
+        "- Respect ctx.get('row_limit', 200) for the size of 'table'.\n"
+        "- Use robust numeric handling: prefer pd.to_numeric(..., errors='coerce'), select_dtypes(include=[np.number]).\n"
+        "- Never use complex dtype or astype(complex).\n"
+        "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
+        "itertools, functools, collections, re, datetime, base64.\n\n"
+        f"RUNTIME ERROR: {runtime_error}\n\n"
+        f"PREVIOUS CODE:\n```python\n{previous_code}\n```\n\n"
+        f"SCHEMA:\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS:\n{sample_preview}\n\n"
+        f"USER QUESTION:\n\"{question}\"\n\n"
+        "Return only the repaired Python code block."
+    )
+
+    resp = model.generate_content(
+        prompt,
+        generation_config={
+            "max_output_tokens": _MAX_TOKENS,
+            "temperature": 0.0,
+        },
+    )
+    text = _safe_response_text(resp)
+    code = _extract_code_block(text)
+    if not code or not re.search(r"def\s+run\s*\(", code):
+        raise RuntimeError("REPAIR_FAILED: Missing valid 'def run(df, ctx):' implementation.")
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _safe_response_text(resp) -> str:
+    """Safely extract text from Gemini responses, handling potential exceptions."""
+    try:
+        if getattr(resp, "text", None):
+            return resp.text or ""
+        if getattr(resp, "candidates", None):
+            for c in resp.candidates:
+                content = getattr(c, "content", None)
+                parts = getattr(content, "parts", None) if content else None
+                if parts:
+                    return "".join(p.text for p in parts if hasattr(p, "text"))
+    except Exception:
+        return ""
+
+
+def _extract_any_python_block(text: str) -> str:
+    """Extract any fenced python code block. If absent, any fenced block. Else raw text.
+
+    Returns code content without fences.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    m = re.search(r"```python\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```\s*(.*?)```", text, flags=re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def generate_presentational_code(
+    context: dict,
+    schema_snippet: str,
+    style: str = "educational",
+) -> str:
+    """Generate a human-readable, presentational pandas script.
+
+    Rules (STRICT):
+    - Do NOT define `def run(df, ctx)`; assume a DataFrame `df` already exists.
+    - Focus on table-oriented transformations answering the analysis intent.
+    - Do NOT include data loading/cleaning; end with: print(result_df.head()).
+    - Return only the code (no fences in the returned string).
+
+    Context must contain either:
+    - {"command": {...}} from fastpath, or
+    - {"question": "..."} from fallback.
+    """
+    model = _ensure_model()
+
+    if not isinstance(context, dict) or ("command" not in context and "question" not in context):
+        return "# Could not generate code: missing analysis context."
+
+    if "command" in context and context.get("command"):
+        try:
+            analysis_context = f"ANALYSIS COMMAND:\n{json.dumps(context['command'], indent=2, ensure_ascii=False)}"
+        except Exception:
+            analysis_context = "ANALYSIS COMMAND: [unavailable]"
+    else:
+        analysis_context = f"USER QUESTION:\n\"{str(context.get('question') or '').strip()}\""
+
+    base = (
+        "You are an expert Python data analyst writing a tutorial-style script.\n"
+        "Write a clean, self-contained pandas script that is easy for a beginner to understand.\n\n"
+        "--- STRICT RULES ---\n"
+        f"- Style: '{{style}}' (use clear variables and helpful comments).\n"
+        "- Do NOT define def run(df, ctx). Assume a pandas DataFrame named `df` already exists.\n"
+        "- Write only the transformation/aggregation logic relevant to the analysis.\n"
+        "- Do NOT include any data loading or cleaning steps.\n"
+        "- End the script by assigning the final table to `result_df` and then printing: print(result_df.head()).\n"
+    )
+
+    # Format only the base string (which contains the {style} token) to avoid
+    # interfering with JSON braces in the rest of the prompt.
+    base_filled = base.format(style=style)
+    prompt = (
+        f"{base_filled}\n"
+        f"--- DATASET SCHEMA (context) ---\n{schema_snippet}\n\n"
+        f"--- ANALYSIS TO REPRODUCE ---\n{analysis_context}\n\n"
+        "Return a single fenced Python code block."
+    )
+
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": 4096,
+                "temperature": 0.1,
+            },
+        )
+        text = _safe_response_text(resp)
+        code = _extract_any_python_block(text)
+        return code or "# No code generated."
+    except Exception:
+        return "# An error occurred while generating the code."
+
+
+# ---------------------------------------------------------------------------
+# JSON Extraction + Classifiers + Reconstruction
+# ---------------------------------------------------------------------------
+
+def _extract_json_block(text: str) -> str | None:
+    """Extract a JSON object from model text output.
+
+    Prefers a fenced ```json block. Falls back to the first {...} block.
+    Returns the JSON string or None if not found.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    if m:
+        return m.group(1)
+    # Fallback: greedy outermost braces (best-effort)
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        return m.group(0)
+    return None
+
+
+def classify_intent(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict],
+    tool_spec: list[dict],
+    hinting: str | None = None,
+) -> dict:
+    """Classify user intent using Gemini native function-calling.
+
+    Returns: {"intent": str, "params": dict, "confidence": float}
+    On failure, returns UNKNOWN with confidence 0.0.
+    """
+    # Build tools in Gemini format (function_declarations)
+    function_declarations = []
+    for t in tool_spec or []:
+        fn = {
+            "name": t.get("name"),
+            "description": t.get("description", ""),
+            "parameters": t.get("parameters", {"type": "object"}),
+        }
+        if fn["name"]:
+            function_declarations.append(fn)
+    tools_payload = [{"function_declarations": function_declarations}] if function_declarations else None
+
+    # Instantiate a model with tools
+    model_with_tools = genai.GenerativeModel(_MODEL_NAME, tools=tools_payload)
+
+    sample_preview = sample_rows[: min(len(sample_rows), 3)]
+    hint_block = (hinting or "").strip()
+
+    prompt = (
+        "You are a meticulous data analysis router. Your job is to determine if a user's question can be answered by a SINGLE tool call from the provided list.\n"
+        "If the question is ambiguous, requires multiple steps, or combines tasks such that a single tool call cannot fully answer it, you MUST NOT call any function.\n\n"
+        "STRICT RULES:\n"
+        "- Only call a tool if one call can fully and accurately answer the entire question.\n"
+        "- AGGREGATE supports exactly one metric. If the user asks for multiple metrics in one grouped table, DO NOT call any function.\n"
+        "- If the request would require TWO OR MORE tools (e.g., filter + pivot), DO NOT call any function.\n"
+        "- If unsure, do not call any function.\n\n"
+        f"SCHEMA (truncated):\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"
+        f"HINTS:\n{hint_block}\n\n"
+        f"QUESTION:\n{question}\n"
+    )
+
+    try:
+        resp = model_with_tools.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": 2048,
+                "temperature": 0.0,
+            },
+            tool_config={"function_calling_config": "ANY"},
+        )
+        # Find first function_call
+        if getattr(resp, "candidates", None):
+            for c in resp.candidates:
+                content = getattr(c, "content", None)
+                parts = getattr(content, "parts", None) if content else None
+                if not parts:
+                    continue
+                for p in parts:
+                    fc = getattr(p, "function_call", None)
+                    if fc and getattr(fc, "name", None):
+                        name = str(fc.name)
+                        # args may be a dict-like
+                        try:
+                            args = dict(getattr(fc, "args", {}) or {})
+                        except Exception:
+                            args = {}
+                        return {"intent": name, "params": args, "confidence": 0.95}
+        # If no function call, return UNKNOWN
+        return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+    except Exception:
+        return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+
+
+def is_show_code_request(question: str) -> dict:
+    """Detect if the user is asking to show the code.
+
+    Returns {"is_code_request": bool}.
+    """
+    model = _ensure_model()
+    prompt = (
+        "Return STRICT JSON only indicating whether the user asks to show code.\n"
+        "Schema: {\"is_code_request\": true|false}\n\n"
+        f"USER: \"{question}\"\n"
+        "Answer with only a JSON object."
+    )
+    try:
+        resp = model.generate_content(prompt, generation_config={"max_output_tokens": 256, "temperature": 0.0})
+        text = _safe_response_text(resp)
+        js = _extract_json_block(text)
+        if not js:
+            return {"is_code_request": False}
+        data = json.loads(js)
+        return {"is_code_request": bool(data.get("is_code_request") is True)}
+    except Exception:
+        return {"is_code_request": False}
+
+
+def reconstruct_code_from_tool_call(tool_name: str, params: dict, schema_snippet: str) -> str:
+    """Provide a transparent Python implementation of the selected tool call.
+
+    This is shown to users for transparency; it does not need to be executed.
+    """
+    tool = tool_name.upper().strip()
+    code_lines: list[str] = [
+        "import pandas as pd",
+        "import numpy as np",
+        "",
+        "def run(df: pd.DataFrame, ctx: dict) -> dict:",
+        "    row_limit = int((ctx or {}).get('row_limit', 200))",
+    ]
+    if tool == "AGGREGATE":
+        dim = params.get("dimension", "<dimension>")
+        metric = params.get("metric", "<metric>")
+        func = params.get("func", "sum")
+        code_lines += [
+            f"    metric = pd.to_numeric(df['{metric}'], errors='coerce')",
+            f"    grouped = df.groupby('{dim}', dropna=False).agg({{'{metric}': '{func}'}}).reset_index()",
+            f"    grouped.columns = ['{dim}', '{metric}_{func}']",
+            "    table = grouped.sort_values(by=grouped.columns[1], ascending=False).head(row_limit)",
+        ]
+    elif tool == "VARIANCE":
+        dim = params.get("dimension", "<dimension>")
+        a = params.get("periodA", "<periodA>")
+        b = params.get("periodB", "<periodB>")
+        code_lines += [
+            f"    a = pd.to_numeric(df['{a}'], errors='coerce')",
+            f"    b = pd.to_numeric(df['{b}'], errors='coerce')",
+            f"    grouped = df.groupby('{dim}', dropna=False).agg({{'{a}': 'sum', '{b}': 'sum'}}).reset_index()",
+            "    grouped['delta'] = grouped[b] - grouped[a]",
+            "    with np.errstate(divide='ignore', invalid='ignore'):\n        grouped['pct_change'] = (grouped['delta'] / grouped[a]) * 100.0",
+            "    table = grouped.sort_values(by='delta', ascending=False).head(row_limit)",
+        ]
+    elif tool == "FILTER_SORT":
+        sort_col = params.get("sort_col", "<sort_col>")
+        ascending = bool(params.get("ascending", False))
+        limit = int(params.get("limit", 50))
+        fcol = params.get("filter_col")
+        fval = params.get("filter_val")
+        code_lines += [
+            "    dff = df",
+        ]
+        if fcol and fval is not None:
+            code_lines += [
+                f"    dff = dff[dff['{fcol}'].astype(str) == str({repr(fval)})]",
+            ]
+        code_lines += [
+            f"    table = dff.sort_values(by='{sort_col}', ascending={ascending}).head({limit})",
+        ]
+    else:  # DESCRIBE or UNKNOWN
+        code_lines += [
+            "    table = df.select_dtypes(include=['number']).describe().reset_index().to_dict(orient='records')",
+            "    return {'table': table, 'metrics': {'rows': len(df), 'columns': len(df.columns)}, 'chartData': {}}",
+        ]
+        return "\n".join(code_lines)
+
+    code_lines += [
+        "    return {",
+        "        'table': table.to_dict(orient='records'),",
+        "        'metrics': {'rows': len(df), 'columns': len(df.columns)},",
+        "        'chartData': {}",
+        "    }",
+    ]
+    return "\n".join(code_lines)
+
+
+def format_final_response(question: str, result_df: pd.DataFrame) -> dict:
+    """Create a compact summary and visuals stub for a fast-path result."""
+    try:
+        table_head = result_df.head(5).to_dict(orient="records")
+    except Exception:
+        table_head = []
+    metrics = {"rows": int(getattr(result_df, "shape", [0, 0])[0] or 0),
+               "columns": int(getattr(result_df, "shape", [0, 0])[1] or 0)}
+    summary = generate_summary(question, table_head, metrics)
+    visuals: list[dict] = []
+    return {"summary": summary, "visuals": visuals}
+
+
+def reconstruct_presentational_code(
+    question: str,
+    schema_snippet: str,
+    sample_rows: list[dict] | None,
+    last_exec_code: str | None = None,
+) -> str:
+    """Generate a clean presentational Python script for display.
+
+    Uses the last executed fallback code (if provided) as context to align logic,
+    but returns a simplified, commented script suitable for UI display only.
+    """
+    model = _ensure_model()
+    preview = (sample_rows or [])[: min(len(sample_rows or []), 5)]
+    context = last_exec_code or ""
+    prompt = (
+        "You are a senior data analyst. Create a clean, commented Python function\n"
+        "`def run(df, ctx):` that reproduces the last analysis over the dataset schema below.\n"
+        "Use idiomatic pandas/numpy and return a dict with keys: 'table' (list of rows),\n"
+        "'metrics' (dict), and 'chartData' (object). Respect ctx.get('row_limit', 200).\n"
+        "Avoid complex dtypes and keep it readable.\n\n"
+        f"SCHEMA:\n{schema_snippet}\n\n"
+        f"SAMPLE ROWS (truncated):\n{preview}\n\n"
+        "If helpful, align with the following reference code (do not copy blindly; clean it up):\n"
+        f"```python\n{context}\n```\n\n"
+        "Return only one fenced Python block."
+    )
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": _MAX_TOKENS,
+                "temperature": 0.1,
+            },
+        )
+        text = _safe_response_text(resp)
+        code = _extract_code_block(text)
+        return code or ""
+    except Exception:
+        return ""
+
+
+def _extract_code_block(text: str) -> str:
+    """Extract a Python code block robustly from a response."""
+    # 1. Prefer fenced python block
+    m = re.search(r"```python\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        code = m.group(1).strip()
+        if re.search(r"def\s+run\s*\(", code):
+            return code
+
+    # 2. Fallback to any fenced block
+    m = re.search(r"```(.*?)```", text, flags=re.DOTALL)
+    if m:
+        code = m.group(1).strip()
+        if re.search(r"def\s+run\s*\(", code):
+            return code
+
+    # 3. Heuristic fallback: find the start of the function definition
+    m = re.search(r"(def\s+run\s*\(.*)", text, flags=re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    return ""
+</file>
+
+<file path="main.py">
+import json
+import os
+import time
+import uuid
+import subprocess
+import sys
+import io
+from datetime import datetime, timezone, timedelta
+from typing import Generator, Iterable
+
+import functions_framework
+from flask import Request, Response
+from google.cloud import firestore
+from google.cloud import storage
+import pandas as pd
+import base64
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+import pyarrow as pa  # type: ignore
+import pyarrow.parquet as pq  # type: ignore
+
+import firebase_admin
+from firebase_admin import auth as fb_auth
+import google.auth
+from google.auth import impersonated_credentials
+import google.auth.transport.requests
+
+import gemini_client
+import sandbox_runner
+import analysis_toolkit
+import aliases
+from google.api_core import exceptions as gax_exceptions  # type: ignore
+import logging
+from functools import lru_cache
+import re
+
+# Configuration
+PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
+FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
+PING_INTERVAL_SECONDS = int(os.getenv("SSE_PING_INTERVAL_SECONDS", "22"))
+HARD_TIMEOUT_SECONDS = int(os.getenv("CHAT_HARD_TIMEOUT_SECONDS", "60"))
+REPAIR_TIMEOUT_SECONDS = int(os.getenv("CHAT_REPAIR_TIMEOUT_SECONDS", "30"))
+ORCH_IPC_MODE = os.getenv("ORCH_IPC_MODE", "base64").lower()
+RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
+
+# Smart dispatcher flags
+FASTPATH_ENABLED = os.getenv("FASTPATH_ENABLED", "1").lower() not in ("0", "false", "no")
+FALLBACK_ENABLED = os.getenv("FALLBACK_ENABLED", "1").lower() not in ("0", "false", "no")
+CODE_RECONSTRUCT_ENABLED = os.getenv("CODE_RECONSTRUCT_ENABLED", "1").lower() not in ("0", "false", "no")
+MIN_FASTPATH_CONFIDENCE = float(os.getenv("MIN_FASTPATH_CONFIDENCE", "0.65"))
+CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CLASSIFIER_TIMEOUT_SECONDS", "8"))
+MAX_FASTPATH_ROWS = int(os.getenv("MAX_FASTPATH_ROWS", "50000"))
+FORCE_FALLBACK_MIN_ROWS = int(os.getenv("FORCE_FALLBACK_MIN_ROWS", "500000"))
+MAX_CHART_POINTS = int(os.getenv("MAX_CHART_POINTS", "500"))
+TOOLKIT_VERSION = int(os.getenv("TOOLKIT_VERSION", str(getattr(analysis_toolkit, "TOOLKIT_VERSION", 1))))
+MIRROR_COMMAND_TO_FIRESTORE = os.getenv("MIRROR_COMMAND_TO_FIRESTORE", "0").lower() in ("1", "true", "yes")
+CODEGEN_TIMEOUT_SECONDS = int(os.getenv("CODEGEN_TIMEOUT_SECONDS", "30"))
+
+ALLOWED_ORIGINS = {
+    o.strip()
+    for o in (os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com",
+    ) or "").split(",")
+    if o.strip()
+}
+
+# Firebase Admin SDK Initialization
+try:
+    firebase_admin.get_app()
+except ValueError:
+    firebase_admin.initialize_app()
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    return origin in ALLOWED_ORIGINS if origin else False
+
+
+_CACHED_SIGNING_CREDS = None
+_CACHED_EXPIRES_AT = 0.0
+
+def _impersonated_signing_credentials(sa_email: str | None):
+    """Creates and caches impersonated credentials for signing URLs."""
+    global _CACHED_SIGNING_CREDS, _CACHED_EXPIRES_AT
+    now = time.time()
+    if _CACHED_SIGNING_CREDS and now < _CACHED_EXPIRES_AT:
+        return _CACHED_SIGNING_CREDS
+
+    source_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    if not sa_email:
+        creds = source_creds
+    else:
+        creds = impersonated_credentials.Credentials(
+            source_credentials=source_creds,
+            target_principal=sa_email,
+            target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            lifetime=3600,
+        )
+    _CACHED_SIGNING_CREDS = creds
+    _CACHED_EXPIRES_AT = now + 3300  # ~55m
+    return _CACHED_SIGNING_CREDS
+
+
+def _sign_gs_uri(gs_uri: str, minutes: int = 15) -> str:
+    """Returns a signed HTTPS URL for a gs:// URI."""
+    if not gs_uri or not gs_uri.startswith("gs://"):
+        return gs_uri
+    try:
+        bucket_name, blob_path = gs_uri[5:].split("/", 1)
+        storage_client = storage.Client(project=PROJECT_ID)
+        blob = storage_client.bucket(bucket_name).blob(blob_path)
+        signing_creds = _impersonated_signing_credentials(RUNTIME_SERVICE_ACCOUNT)
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=minutes),
+            method="GET",
+            credentials=signing_creds,
+        )
+    except Exception:
+        return gs_uri
+
+
+def _sse_format(obj: dict) -> str:
+    """Formats a dictionary as a Server-Sent Event string."""
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterable[str]:
+    """Generator function for the main SSE event stream."""
+    yield _sse_format({"type": "received", "data": {"sessionId": session_id, "datasetId": dataset_id}})
+
+    # Setup GCS and Firestore clients
+    storage_client = storage.Client(project=PROJECT_ID)
+    bucket = storage_client.bucket(FILES_BUCKET)
+    fs = firestore.Client(project=PROJECT_ID)
+
+    # Fetch payload.json for schema and sample data
+    payload_obj = {}
+    try:
+        payload_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/metadata/payload.json"
+        payload_blob = bucket.blob(payload_gcs_path)
+        payload_obj = json.loads(payload_blob.download_as_text())
+    except Exception as e:
+        yield _sse_format({"type": "error", "data": {"code": "PAYLOAD_READ_FAILED", "message": f"Could not read metadata: {e}"}})
+        return
+
+    schema_snippet = json.dumps(payload_obj.get("columns", {}))[:1000]
+    sample_rows = payload_obj.get("sample_rows", [])[:10]
+    dataset_meta = payload_obj.get("dataset", {}) or {}
+    dataset_rows = int(dataset_meta.get("rows") or 0)
+    column_names = list(dataset_meta.get("column_names") or (payload_obj.get("columns", {}) or {}).keys())
+    columns_schema = payload_obj.get("columns", {}) or {}
+
+    # --- Router helpers: DESCRIBE lexicon and multi-metric detection ---
+    def _is_describe_like(q: str) -> bool:
+        if not isinstance(q, str) or not q:
+            return False
+        ql = q.lower()
+        # Expanded lexicon per decision
+        lex = ["describe", "summary", "summarize", "overview", "stats", "schema", "fields"]
+        has_keyword = any(re.search(rf"\b{re.escape(tok)}\b", ql) for tok in lex)
+        has_grouping = bool(re.search(r"\b(by|per)\b", ql))
+        return has_keyword and not has_grouping
+
+    def _is_multi_metric_request(q: str, col_names: list[str], cols_schema: dict) -> bool:
+        if not isinstance(q, str) or not q:
+            return False
+        ql = q.lower()
+        # Heuristic: mentions average/mean and has conjunctions and grouping cue
+        pattern_avg = bool(re.search(r"\b(avg|average|mean)\b", ql))
+        pattern_multi = bool(re.search(r"\b(and)\b|,", ql))
+        pattern_group = bool(re.search(r"\b(by|per)\b", ql))
+
+        # Column resolution: count unique resolved columns referenced in question
+        tokens = re.findall(r"[a-zA-Z0-9_]+", ql)
+        resolved: set[str] = set()
+        for t in tokens:
+            col = aliases.resolve_column(t, col_names)
+            if col:
+                # Optionally check numeric-ish types if provided in schema
+                meta = (cols_schema or {}).get(col, {})
+                dtype = str(meta.get("dtype") or meta.get("type") or "").lower()
+                if dtype:
+                    if any(k in dtype for k in ["int", "float", "number", "numeric", "double", "decimal"]):
+                        resolved.add(col)
+                    else:
+                        # If dtype present but non-numeric, skip
+                        continue
+                else:
+                    # If no dtype info, still count the resolved column
+                    resolved.add(col)
+
+        return (pattern_avg and pattern_multi and pattern_group) or (len(resolved) >= 2 and pattern_group)
+
+    # --- Optional: Unified Presentational Code (Show Code) ---
+    @lru_cache(maxsize=32)
+    def _cached_presentational_code(mid: str, ctx_json: str, schema: str, style: str) -> str:
+        try:
+            ctx = json.loads(ctx_json)
+        except Exception:
+            ctx = {}
+        return gemini_client.generate_presentational_code(ctx, schema, style=style)
+
+    try:
+        if CODE_RECONSTRUCT_ENABLED:
+            show_req = gemini_client.is_show_code_request(question)
+            if isinstance(show_req, dict) and show_req.get("is_code_request") is True:
+                results_prefix = f"users/{uid}/sessions/{session_id}/results/"
+                latest_strategy_blob = None
+                for blob in storage_client.list_blobs(FILES_BUCKET, prefix=results_prefix):
+                    if blob.name.endswith("/strategy.json"):
+                        if latest_strategy_blob is None or (getattr(blob, "updated", None) and blob.updated > latest_strategy_blob.updated):
+                            latest_strategy_blob = blob
+                if latest_strategy_blob is None:
+                    yield _sse_format({"type": "error", "data": {"code": "NO_PREV_ANALYSIS", "message": "No previous analysis found to reconstruct."}})
+                    return
+                strategy_obj = json.loads(latest_strategy_blob.download_as_text()) or {}
+                result_dir = latest_strategy_blob.name.rsplit("/", 1)[0]
+                message_id_prev = result_dir.split("/")[-1]
+
+                context: dict = {}
+                if isinstance(strategy_obj.get("command"), dict):
+                    context = {"command": strategy_obj.get("command")}
+                elif isinstance(strategy_obj.get("question"), str) and strategy_obj.get("question").strip():
+                    context = {"question": strategy_obj.get("question")}
+                else:
+                    # Back-compat: try command.json
+                    cmd_blob = storage_client.bucket(FILES_BUCKET).blob(f"{result_dir}/command.json")
+                    if cmd_blob.exists():
+                        try:
+                            context = {"command": json.loads(cmd_blob.download_as_text())}
+                        except Exception:
+                            context = {}
+
+                if not context:
+                    yield _sse_format({"type": "error", "data": {"code": "NO_CONTEXT", "message": "Could not find the context for the previous analysis."}})
+                    return
+
+                style = os.getenv("PRESENTATIONAL_CODE_STYLE", "educational")
+                ctx_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
+                code_text = _cached_presentational_code(message_id_prev, ctx_json, schema_snippet, style)
+                yield _sse_format({
+                    "type": "code",
+                    "data": {"language": "python", "text": code_text, "warnings": [], "source": "presentation"}
+                })
+                return
+    except Exception:
+        # Non-fatal; continue with normal flow
+        pass
+
+    # --- Smart Dispatcher: Fast-path Classification ---
+    if FASTPATH_ENABLED and (FORCE_FALLBACK_MIN_ROWS <= 0 or dataset_rows < FORCE_FALLBACK_MIN_ROWS):
+        # Build hinting block
+        hinting = json.dumps({
+            "aliases": getattr(aliases, "ALIASES", {}),
+            "dataset_summary": payload_obj.get("dataset_summary") or payload_obj.get("dataset", {}),
+            "columns": column_names[:50],
+        })
+
+        classification = None
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(
+                    gemini_client.classify_intent,
+                    question,
+                    schema_snippet,
+                    sample_rows,
+                    analysis_toolkit.TOOLS_SPEC,
+                    hinting,
+                )
+                remaining = CLASSIFIER_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        classification = fut.result(timeout=min(remaining, 2))
+                        break
+                    except FuturesTimeout:
+                        yield _sse_format({"type": "still_working"})
+                        remaining -= 2
+                        if remaining <= 0:
+                            raise
+        except FuturesTimeout:
+            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+        except Exception:
+            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+
+        # Canonicalize tool name and params to router intents
+        raw_intent = (classification or {}).get("intent") or "UNKNOWN"
+        raw_params = (classification or {}).get("params") or {}
+        confidence = float((classification or {}).get("confidence") or 0.0)
+
+        # Map tool names to canonical intents
+        name_map = {
+            # legacy
+            "run_aggregation": "AGGREGATE",
+            "run_variance": "VARIANCE",
+            "run_filter_and_sort": "FILTER_SORT",
+            "run_describe": "DESCRIBE",
+            # new tranche-1
+            "filter_rows": "FILTER",
+            "sort_rows": "SORT",
+            "value_counts": "VALUE_COUNTS",
+            "top_n_per_group": "TOP_N_PER_GROUP",
+            "pivot_table": "PIVOT",
+            "percentile": "PERCENTILE",
+            "outliers": "OUTLIERS",
+        }
+        intent = name_map.get(str(raw_intent), str(raw_intent).upper())
+
+        # Convert snake_case params to existing camelCase where needed
+        params = dict(raw_params)
+        if intent == "VARIANCE":
+            if "period_a" in params and "periodA" not in params:
+                params["periodA"] = params.get("period_a")
+            if "period_b" in params and "periodB" not in params:
+                params["periodB"] = params.get("period_b")
+
+        # Parameter validation and resolution
+        def _validate_and_resolve(i: str, p: dict) -> tuple[bool, dict]:
+            resolved = dict(p)
+            try:
+                if i == "AGGREGATE":
+                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["metric"] = aliases.resolve_column(p.get("metric"), column_names) or p.get("metric")
+                    return bool(resolved.get("dimension") and resolved.get("metric") and p.get("func")), resolved
+                if i == "VARIANCE":
+                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["periodA"] = aliases.resolve_column(p.get("periodA"), column_names) or p.get("periodA")
+                    resolved["periodB"] = aliases.resolve_column(p.get("periodB"), column_names) or p.get("periodB")
+                    return bool(resolved.get("dimension") and resolved.get("periodA") and resolved.get("periodB")), resolved
+                if i == "FILTER_SORT":
+                    resolved["sort_col"] = aliases.resolve_column(p.get("sort_col"), column_names) or p.get("sort_col")
+                    if p.get("filter_col"):
+                        resolved["filter_col"] = aliases.resolve_column(p.get("filter_col"), column_names) or p.get("filter_col")
+                    return bool(resolved.get("sort_col")), resolved
+                if i == "DESCRIBE":
+                    return True, resolved
+                if i == "FILTER":
+                    flist = []
+                    for f in (p.get("filters") or []):
+                        col = aliases.resolve_column(f.get("column"), column_names) or f.get("column")
+                        flist.append({
+                            "column": col,
+                            "operator": f.get("operator"),
+                            "value": f.get("value"),
+                        })
+                    resolved["filters"] = flist
+                    return bool(flist), resolved
+                if i == "SORT":
+                    resolved["sort_by_column"] = aliases.resolve_column(p.get("sort_by_column"), column_names) or p.get("sort_by_column")
+                    return bool(resolved.get("sort_by_column")), resolved
+                if i == "VALUE_COUNTS":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    return bool(resolved.get("column")), resolved
+                if i == "TOP_N_PER_GROUP":
+                    resolved["group_by_column"] = aliases.resolve_column(p.get("group_by_column"), column_names) or p.get("group_by_column")
+                    resolved["metric_column"] = aliases.resolve_column(p.get("metric_column"), column_names) or p.get("metric_column")
+                    return bool(resolved.get("group_by_column") and resolved.get("metric_column")), resolved
+                if i == "PIVOT":
+                    resolved["index"] = aliases.resolve_column(p.get("index"), column_names) or p.get("index")
+                    resolved["columns"] = aliases.resolve_column(p.get("columns"), column_names) or p.get("columns")
+                    resolved["values"] = aliases.resolve_column(p.get("values"), column_names) or p.get("values")
+                    return bool(resolved.get("index") and resolved.get("columns") and resolved.get("values")), resolved
+                if i == "PERCENTILE":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    # p may be string or number; defer casting to toolkit
+                    return bool(resolved.get("column") and ("p" in p)), resolved
+                if i == "OUTLIERS":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    return bool(resolved.get("column")), resolved
+            except Exception:
+                return False, resolved
+            return False, resolved
+
+        params_ok, resolved_params = _validate_and_resolve(intent, params)
+
+        # Soft-accept logic (stricter): require params_ok for ANY fastpath, keep tighter soft threshold
+        soft_threshold = max(0.0, MIN_FASTPATH_CONFIDENCE - 0.10)
+        is_fastpath_candidate = False
+
+        if intent == "DESCRIBE":
+            # DESCRIBE: only when clearly a describe-like request, never if grouping cues present
+            is_fastpath_candidate = (
+                params_ok
+                and _is_describe_like(question)
+                and (confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold)
+            )
+            if not is_fastpath_candidate:
+                try:
+                    logging.info(json.dumps({
+                        "event": "router_decision",
+                        "strategy": "fallback",
+                        "intent": intent,
+                        "reason": "describe_not_clear"
+                    }))
+                except Exception:
+                    pass
+        elif intent in {"AGGREGATE", "VARIANCE", "FILTER_SORT"}:
+            # Capability guard for AGGREGATE: multi-metric grouped tables require fallback
+            if intent == "AGGREGATE" and _is_multi_metric_request(question, column_names, columns_schema):
+                is_fastpath_candidate = False
+                try:
+                    logging.info(json.dumps({
+                        "event": "router_decision",
+                        "strategy": "fallback",
+                        "intent": intent,
+                        "reason": "multi_metric_guard"
+                    }))
+                except Exception:
+                    pass
+            else:
+                is_fastpath_candidate = params_ok and (
+                    confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold
+                )
+
+        # Optional SSE for debugging (no data rows logged)
+        if os.getenv("LOG_CLASSIFIER_RESPONSE") == "1":
+            try:
+                yield _sse_format({
+                    "type": "classification_result",
+                    "data": {"intent": intent, "params": resolved_params, "confidence": confidence}
+                })
+            except Exception:
+                pass
+        # Structured log for classifier outcome (no sample rows)
+        try:
+            logging.info(json.dumps({
+                "event": "classifier_result",
+                "intent": intent,
+                "confidence": confidence,
+                "params": resolved_params,
+                "dataset_rows": dataset_rows,
+            }))
+        except Exception:
+            pass
+
+        if is_fastpath_candidate:
+            try:
+                logging.info(json.dumps({
+                    "event": "router_decision",
+                    "strategy": "fastpath",
+                    "reason": "accepted",
+                    "intent": intent,
+                    "confidence": confidence,
+                }))
+            except Exception:
+                pass
+            yield _sse_format({"type": "generating_code"})
+            yield _sse_format({"type": "running_fast"})
+            parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
+            try:
+                parquet_blob = bucket.blob(parquet_gcs_path)
+                parquet_bytes = parquet_blob.download_as_bytes()
+            except Exception as e:
+                yield _sse_format({"type": "error", "data": {"code": "DATA_READ_FAILED", "message": str(e)}})
+            else:
+                try:
+                    # Determine needed columns using a central helper
+                    def _col_prune_disabled(intent_name: str) -> bool:
+                        flag = os.getenv(f"FASTPATH_DISABLE_COLUMN_PRUNE_{intent_name}", "0").lower()
+                        return flag in ("1", "true", "yes")
+
+                    def compute_needed_cols(intent_name: str, rp: dict) -> list[str] | None:
+                        if _col_prune_disabled(intent_name):
+                            return None
+                        if intent_name == "AGGREGATE":
+                            return [c for c in [rp.get("dimension"), rp.get("metric")] if c]
+                        if intent_name == "VARIANCE":
+                            return [c for c in [rp.get("dimension"), rp.get("periodA"), rp.get("periodB")] if c]
+                        if intent_name == "FILTER_SORT":
+                            return [c for c in [rp.get("sort_col"), rp.get("filter_col")] if c]
+                        if intent_name == "FILTER":
+                            cols = []
+                            for f in (rp.get("filters") or []):
+                                if f.get("column"):
+                                    cols.append(f["column"])
+                            return list(dict.fromkeys(cols)) or None
+                        if intent_name == "SORT":
+                            return [c for c in [rp.get("sort_by_column")] if c]
+                        if intent_name == "VALUE_COUNTS":
+                            return [c for c in [rp.get("column")] if c]
+                        if intent_name == "TOP_N_PER_GROUP":
+                            return [c for c in [rp.get("group_by_column"), rp.get("metric_column")] if c]
+                        if intent_name == "PIVOT":
+                            return [c for c in [rp.get("index"), rp.get("columns"), rp.get("values")] if c]
+                        if intent_name == "PERCENTILE":
+                            return [c for c in [rp.get("column")] if c]
+                        if intent_name == "OUTLIERS":
+                            return [c for c in [rp.get("column")] if c]
+                        return None
+
+                    needed_cols = compute_needed_cols(intent, resolved_params)
+
+                    if needed_cols:
+                        df = pd.read_parquet(io.BytesIO(parquet_bytes), columns=needed_cols)
+                    else:
+                        df = pd.read_parquet(io.BytesIO(parquet_bytes))
+                    if MAX_FASTPATH_ROWS > 0 and len(df) > MAX_FASTPATH_ROWS:
+                        df = df.head(MAX_FASTPATH_ROWS)
+
+                    # Execute
+                    if intent == "AGGREGATE":
+                        dim = resolved_params.get("dimension")
+                        met = resolved_params.get("metric")
+                        res_df = analysis_toolkit.run_aggregation(df, dim, met, resolved_params.get("func", params.get("func", "sum")))
+                    elif intent == "VARIANCE":
+                        dim = resolved_params.get("dimension")
+                        a = resolved_params.get("periodA")
+                        b = resolved_params.get("periodB")
+                        res_df = analysis_toolkit.run_variance(df, dim, a, b)
+                    elif intent == "FILTER_SORT":
+                        sort_col = resolved_params.get("sort_col")
+                        fcol = resolved_params.get("filter_col")
+                        res_df = analysis_toolkit.run_filter_and_sort(
+                            df,
+                            sort_col=sort_col,
+                            ascending=bool(resolved_params.get("ascending", params.get("ascending", False))),
+                            limit=int((resolved_params.get("limit") or params.get("limit") or 50)),
+                            filter_col=fcol,
+                            filter_val=resolved_params.get("filter_val", params.get("filter_val")),
+                        )
+                    elif intent == "FILTER":
+                        res_df = analysis_toolkit.filter_rows(df, filters=resolved_params.get("filters") or [])
+                    elif intent == "SORT":
+                        res_df = analysis_toolkit.sort_rows(
+                            df,
+                            sort_by_column=resolved_params.get("sort_by_column"),
+                            ascending=bool(resolved_params.get("ascending", False)),
+                            limit=int(resolved_params.get("limit") or 0),
+                        )
+                    elif intent == "VALUE_COUNTS":
+                        res_df = analysis_toolkit.value_counts(
+                            df,
+                            column=resolved_params.get("column"),
+                            top=int(resolved_params.get("top") or 100),
+                            include_pct=bool(resolved_params.get("include_pct", True)),
+                        )
+                    elif intent == "TOP_N_PER_GROUP":
+                        res_df = analysis_toolkit.top_n_per_group(
+                            df,
+                            group_by_column=resolved_params.get("group_by_column"),
+                            metric_column=resolved_params.get("metric_column"),
+                            n=int(resolved_params.get("n") or 5),
+                            ascending=bool(resolved_params.get("ascending", False)),
+                        )
+                    elif intent == "PIVOT":
+                        res_df = analysis_toolkit.pivot_table(
+                            df,
+                            index=resolved_params.get("index"),
+                            columns=resolved_params.get("columns"),
+                            values=resolved_params.get("values"),
+                            aggfunc=str(resolved_params.get("aggfunc") or "sum"),
+                        )
+                    elif intent == "PERCENTILE":
+                        res_df = analysis_toolkit.percentile(
+                            df,
+                            column=resolved_params.get("column"),
+                            p=resolved_params.get("p"),
+                        )
+                    elif intent == "OUTLIERS":
+                        res_df = analysis_toolkit.outliers(
+                            df,
+                            column=resolved_params.get("column"),
+                            method=str(resolved_params.get("method") or "iqr"),
+                            k=resolved_params.get("k", 1.5),
+                        )
+                    else:
+                        res_df = analysis_toolkit.run_describe(df)
+
+                    # Summarization with timeout for resilience
+                    summary_obj = {}
+                    try:
+                        with ThreadPoolExecutor(max_workers=1) as ex:
+                            fut = ex.submit(gemini_client.format_final_response, question, res_df)
+                            summary_obj = fut.result(timeout=15)
+                    except Exception as e:
+                        try:
+                            logging.warning(f"Summarization call failed or timed out: {e}")
+                        except Exception:
+                            pass
+                        summary_obj = {"summary": "The analysis is complete. Please review the data below."}
+                    summary_text = summary_obj.get("summary") or ""
+                    table_rows = res_df.head(50).to_dict(orient="records")
+                    metrics = {"rows": int(getattr(res_df, "shape", [0, 0])[0] or 0),
+                               "columns": int(getattr(res_df, "shape", [0, 0])[1] or 0)}
+                    chart_data = {}
+
+                    yield _sse_format({"type": "persisting"})
+                    message_id = str(uuid.uuid4())
+                    results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
+                    table_path = f"{results_prefix}/fastpath_table.json"
+                    metrics_path = f"{results_prefix}/fastpath_metrics.json"
+                    chart_path = f"{results_prefix}/fastpath_chart_data.json"
+                    summary_path = f"{results_prefix}/summary.json"
+                    command_path = f"{results_prefix}/command.json"
+                    strategy_path = f"{results_prefix}/strategy.json"
+
+                    try:
+                        table_blob = bucket.blob(table_path)
+                        metrics_blob = bucket.blob(metrics_path)
+                        chart_blob = bucket.blob(chart_path)
+                        summary_blob = bucket.blob(summary_path)
+                        command_blob = bucket.blob(command_path)
+                        strategy_blob = bucket.blob(strategy_path)
+
+                        table_data = json.dumps({"rows": table_rows}, ensure_ascii=False).encode("utf-8")
+                        metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
+                        chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
+                        summary_data = json.dumps({"text": summary_text}, ensure_ascii=False).encode("utf-8")
+                        command_obj = {
+                            "intent": intent,
+                            "params": resolved_params,
+                            "confidence": confidence,
+                            "toolkitVersion": TOOLKIT_VERSION,
+                        }
+                        command_data = json.dumps(command_obj, ensure_ascii=False).encode("utf-8")
+                        strategy_obj = {
+                            "strategy": "fastpath",
+                            "version": TOOLKIT_VERSION,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "messageId": message_id,
+                            "question": question,
+                            "command": command_obj,
+                        }
+                        strategy_data = json.dumps(strategy_obj, ensure_ascii=False).encode("utf-8")
+
+                        with ThreadPoolExecutor(max_workers=6) as executor:
+                            futures = [
+                                executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
+                                executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
+                                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"),
+                                executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
+                                executor.submit(command_blob.upload_from_string, command_data, content_type="application/json"),
+                                executor.submit(strategy_blob.upload_from_string, strategy_data, content_type="application/json"),
+                            ]
+                            for f in futures:
+                                f.result()
+                        table_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{table_path}")
+                        metrics_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{metrics_path}")
+                        chart_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{chart_path}")
+                        summary_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{summary_path}")
+                    except Exception as e:
+                        yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)}})
+                        return
+
+                    yield _sse_format({
+                        "type": "done",
+                        "data": {
+                            "messageId": message_id,
+                            "summary": summary_text,
+                            "tableSample": table_rows,
+                            "chartData": chart_data,
+                            "metrics": metrics,
+                            "strategy": "fastpath",
+                            "uris": {
+                                "table": table_url,
+                                "metrics": metrics_url,
+                                "chartData": chart_url,
+                                "summary": summary_url
+                            }
+                        }
+                    })
+                    return
+                except Exception:
+                    try:
+                        yield _sse_format({"type": "fastpath_error", "data": {"message": "A quick path failed; trying a more flexible approach."}})
+                    except Exception:
+                        pass
+                    try:
+                        logging.info(json.dumps({
+                            "event": "router_decision",
+                            "strategy": "fallback",
+                            "reason": "fastpath_error",
+                            "intent": intent,
+                            "confidence": confidence,
+                        }))
+                    except Exception:
+                        pass
+
+    # --- Main Generation and Validation Loop ---
+    yield _sse_format({"type": "generating_code"})
+    code, is_valid, validation_errors, warnings = "", False, ["Code generation failed."], []
+    
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            # Time-bounded code generation with keepalive pings
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(gemini_client.generate_code_and_summary, question, schema_snippet, sample_rows)
+                remaining = CODEGEN_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        raw_code, llm_response_text = fut.result(timeout=min(remaining, 2))
+                        break
+                    except FuturesTimeout:
+                        # Keep the connection alive for the UI
+                        try:
+                            yield _sse_format({"type": "still_working"})
+                        except Exception:
+                            pass
+                        remaining -= 2
+                        if remaining <= 0:
+                            raise
+
+            if not raw_code:
+                # If code extraction fails, use the raw response for the repair prompt
+                validation_errors = [f"LLM did not return a valid code block. Response: {llm_response_text[:200]}"]
+                question = f"The previous attempt failed. Please fix it. The error was: {validation_errors[0]}. Original question: {question}"
+                continue # Retry
+
+            # Validate the generated code
+            is_valid, validation_errors, warnings = sandbox_runner.validate_code(raw_code)
+            
+            if is_valid:
+                code = raw_code
+                break # Success
+            else:
+                # If validation fails, use the errors for the repair prompt
+                question = f"The previous code failed validation. Please fix it. Errors: {'; '.join(validation_errors)}. Original question: {question}"
+
+        except FuturesTimeout:
+            # Application-level timeout for code generation
+            yield _sse_format({
+                "type": "error",
+                "data": {
+                    "code": "CODEGEN_TIMEOUT",
+                    "message": f"Analysis step took longer than {CODEGEN_TIMEOUT_SECONDS}s. Please rephrase or try again.",
+                },
+            })
+            return
+        except Exception as e:
+            validation_errors = [f"An unexpected error occurred during code generation: {e}"]
+
+    if not is_valid or not code:
+        yield _sse_format({"type": "error", "data": {"code": "CODE_VALIDATION_FAILED", "message": "; ".join(validation_errors)}})
+        return
+    
+    # --- Emit the validated code so the UI can display it (even if execution fails) ---
+    try:
+        yield _sse_format({
+            "type": "code",
+            "data": {
+                "language": "python",
+                "text": code,
+                "warnings": (warnings or []),
+                "source": "fallback_execution",
+            }
+        })
+    except Exception:
+        # Non-fatal: continue workflow even if emitting this event fails
+        pass
+
+    # --- Execute the validated code (with one-time repair on failure) ---
+    yield _sse_format({"type": "running_fast"})
+    parquet_gcs_path = f"users/{uid}/sessions/{session_id}/datasets/{dataset_id}/cleaned/cleaned.parquet"
+    try:
+        parquet_blob = bucket.blob(parquet_gcs_path)
+        parquet_bytes = parquet_blob.download_as_bytes()
+        parquet_b64 = base64.b64encode(parquet_bytes).decode("ascii")
+    except Exception as e:
+        yield _sse_format({"type": "error", "data": {"code": "DATA_READ_FAILED", "message": str(e)}})
+        return
+
+    def _run_once(code_to_run: str) -> dict:
+        worker_path = os.path.join(os.path.dirname(__file__), "worker.py")
+        proc = subprocess.run(
+            [sys.executable, worker_path],
+            input=json.dumps({
+                "code": code_to_run,
+                "parquet_b64": parquet_b64,
+                "ctx": {"question": question, "row_limit": 200},
+            }).encode("utf-8"),
+            capture_output=True,
+            timeout=HARD_TIMEOUT_SECONDS,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"Worker process failed: {proc.stderr.decode('utf-8', errors='ignore')}")
+        return json.loads(proc.stdout)
+
+    tried_repair = False
+    try:
+        result = _run_once(code)
+        if result.get("error"):
+            raise RuntimeError(f"Execution error: {result['error']}")
+    except subprocess.TimeoutExpired:
+        yield _sse_format({"type": "error", "data": {"code": "TIMEOUT_HARD", "message": f"Execution timed out after {HARD_TIMEOUT_SECONDS}s"}})
+        return
+    except Exception as e_first:
+        # Attempt a single repair using the runtime error
+        try:
+            tried_repair = True
+            yield _sse_format({"type": "repairing"})
+            # Bound the repair step to avoid indefinite hangs
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(gemini_client.repair_code, question, schema_snippet, sample_rows, code, str(e_first))
+                try:
+                    repaired = future.result(timeout=REPAIR_TIMEOUT_SECONDS)
+                except FuturesTimeout:
+                    yield _sse_format({"type": "error", "data": {"code": "REPAIR_TIMEOUT", "message": f"Repair step timed out after {REPAIR_TIMEOUT_SECONDS}s"}})
+                    return
+            ok2, errs2, warns2 = sandbox_runner.validate_code(repaired)
+            if not ok2:
+                yield _sse_format({"type": "error", "data": {"code": "CODE_VALIDATION_FAILED", "message": "; ".join(errs2)}})
+                return
+            code = repaired
+            warnings = warns2
+            # Emit updated code for the UI
+            try:
+                yield _sse_format({
+                    "type": "code",
+                    "data": {"language": "python", "text": code, "warnings": (warnings or []), "source": "fallback_execution"}
+                })
+            except Exception:
+                pass
+            # Re-run once
+            yield _sse_format({"type": "running_fast"})
+            result = _run_once(code)
+            if result.get("error"):
+                raise RuntimeError(f"Execution error: {result['error']}")
+        except subprocess.TimeoutExpired:
+            yield _sse_format({"type": "error", "data": {"code": "TIMEOUT_HARD", "message": f"Execution timed out after {HARD_TIMEOUT_SECONDS}s"}})
+            return
+        except Exception as e_second:
+            # Final failure after repair attempt
+            yield _sse_format({"type": "error", "data": {"code": "EXEC_FAILED", "message": str(e_second)}})
+            return
+
+    # ✅ FIX 2: Correct key names (singular, not plural)
+    message_id = str(uuid.uuid4())
+    table = result.get("table", [])  # "table" not "tables"
+    chart_data = result.get("chartData", {})  # "chartData" not "charts"
+    metrics = result.get("metrics", {})
+    
+    yield _sse_format({"type": "summarizing"})
+    summary = result.get("summary") or gemini_client.generate_summary(question, table[:5], metrics)
+    
+    # ✅ FIX 3: Add actual persistence logic
+    yield _sse_format({"type": "persisting"})
+    
+    results_prefix = f"users/{uid}/sessions/{session_id}/results/{message_id}"
+    table_path = f"{results_prefix}/fallback_table.json"
+    metrics_path = f"{results_prefix}/fallback_metrics.json"
+    chart_path = f"{results_prefix}/fallback_chart_data.json"
+    summary_path = f"{results_prefix}/summary.json"
+    strategy_path = f"{results_prefix}/strategy.json"
+    exec_code_path = f"{results_prefix}/fallback_exec_code.py"
+    
+    try:
+        table_blob = bucket.blob(table_path)
+        metrics_blob = bucket.blob(metrics_path)
+        chart_blob = bucket.blob(chart_path)
+        summary_blob = bucket.blob(summary_path)
+        strategy_blob = bucket.blob(strategy_path)
+        exec_code_blob = bucket.blob(exec_code_path)
+        
+        table_data = json.dumps({"rows": table}, ensure_ascii=False).encode("utf-8")
+        metrics_data = json.dumps(metrics, ensure_ascii=False).encode("utf-8")
+        chart_data_json = json.dumps(chart_data, ensure_ascii=False).encode("utf-8")
+        summary_data = json.dumps({"text": summary}, ensure_ascii=False).encode("utf-8")
+        
+        # Upload in parallel (do not expose exec code URL)
+        strategy_obj = {
+            "strategy": "fallback",
+            "version": TOOLKIT_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "messageId": message_id,
+            "question": question,
+        }
+        strategy_data = json.dumps(strategy_obj, ensure_ascii=False).encode("utf-8")
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [
+                executor.submit(table_blob.upload_from_string, table_data, content_type="application/json"),
+                executor.submit(metrics_blob.upload_from_string, metrics_data, content_type="application/json"),
+                executor.submit(chart_blob.upload_from_string, chart_data_json, content_type="application/json"), 
+                executor.submit(summary_blob.upload_from_string, summary_data, content_type="application/json"),
+                executor.submit(strategy_blob.upload_from_string, strategy_data, content_type="application/json"),
+                executor.submit(exec_code_blob.upload_from_string, code.encode("utf-8"), content_type="text/plain"),
+            ]
+            for f in futures:
+                f.result()
+        
+        # Generate signed URLs for frontend
+        table_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{table_path}")
+        metrics_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{metrics_path}")
+        chart_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{chart_path}")
+        summary_url = _sign_gs_uri(f"gs://{FILES_BUCKET}/{summary_path}")
+        
+    except Exception as e:
+        yield _sse_format({"type": "error", "data": {"code": "PERSIST_FAILED", "message": str(e)}})
+        return
+    
+    # Final 'done' event with URLs
+    yield _sse_format({
+        "type": "done",
+        "data": {
+            "messageId": message_id,
+            "summary": summary,
+            "tableSample": table[:50],  # Now works correctly
+            "chartData": chart_data,
+            "metrics": metrics,
+            "strategy": "fallback",
+            "uris": {
+                "table": table_url,
+                "metrics": metrics_url,
+                "chartData": chart_url,
+                "summary": summary_url
+            }
+        }
+    })
+
+
+@functions_framework.http
+def chat(request: Request) -> Response:
+    """HTTP entry point for the chat Cloud Function."""
+    origin = request.headers.get("Origin") or ""
+    if request.method == "OPTIONS":
+        if not _origin_allowed(origin): return ("Origin not allowed", 403)
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-Id",
+            "Access-Control-Max-Age": "3600",
+        }
+        return ("", 204, headers)
+
+    try:
+        if not _origin_allowed(origin):
+            return Response(json.dumps({"error": "origin not allowed"}), 403, mimetype="application/json")
+
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.split(" ", 1)[1] if auth_header.lower().startswith("bearer ") else None
+        if not token:
+            return Response(json.dumps({"error": "missing token"}), 401, mimetype="application/json")
+        
+        decoded = fb_auth.verify_id_token(token)
+        uid = decoded["uid"]
+        
+        payload = request.get_json(silent=True) or {}
+        session_id = payload.get("sessionId")
+        dataset_id = payload.get("datasetId")
+        question = payload.get("question", "")
+        
+        if not all([session_id, dataset_id, uid]):
+            return Response(json.dumps({"error": "missing sessionId or datasetId"}), 400, mimetype="application/json")
+
+        headers = {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": origin,
+        }
+        return Response(_events(session_id, dataset_id, uid, question), headers=headers)
+
+    except Exception as e:
+        return Response(json.dumps({"error": "internal error", "detail": str(e)}), 500, mimetype="application/json")
+</file>
+
+<file path="requirements.txt">
+functions-framework==3.5.0
+google-cloud-firestore==2.16.0
+google-cloud-storage==2.16.0
+google-cloud-secret-manager==2.20.2
+flask==3.0.3
+pandas==2.2.2
+numpy==2.0.2
+pyarrow==16.1.0
+google-generativeai==0.7.2
+firebase-admin==6.5.0
+matplotlib==3.8.4
+seaborn==0.13.2
+</file>
+
+<file path="sandbox_runner.py">
+"""
+AST-based validation for LLM-generated analysis code.
+
+This module statically validates dynamically generated Python analysis code to
+enforce security and sandbox constraints before execution.
+
+Checks performed:
+- The presence of a required function signature: `def run(df, ctx):`
+- Imports restricted to an allowlist (configurable via SANDBOX_MODE).
+- Disallowed function calls (e.g., exec, open, eval).
+- Disallowed attribute or name access (dunder methods, globals).
+- Optional loop-depth and import-count limits (prevent runaway code).
+
+Environment variable:
+    SANDBOX_MODE = "restricted" | "rich"   (default: restricted)
+"""
+
+from __future__ import annotations
+import ast
+import os
+from typing import Iterable, Tuple, Dict, List
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+_SANDBOX_MODE = os.getenv("SANDBOX_MODE", "restricted").lower()
+
+# Minimal baseline imports for restricted environments
+ALLOWED_IMPORTS_BASE = {"pandas", "numpy", "math", "json"}
+
+# Rich mode adds analysis and visualization support
+ALLOWED_IMPORTS_RICH = {
+    "matplotlib", "seaborn", "statistics", "io", "itertools", "functools",
+    "collections", "re", "datetime", "base64",
+}
+
+ALLOWED_IMPORTS = set(ALLOWED_IMPORTS_BASE)
+if _SANDBOX_MODE in ("rich", "extended"):
+    ALLOWED_IMPORTS.update(ALLOWED_IMPORTS_RICH)
+
+# Dangerous constructs and module prefixes
+FORBIDDEN_NAMES = {"exec", "eval", "compile", "open", "__import__", "globals", "locals", "input"}
+
+FORBIDDEN_MODULE_PREFIXES = {
+    "os", "sys", "subprocess", "socket", "asyncio", "multiprocessing",
+    "threading", "ctypes", "pathlib", "importlib", "pdb", "pickle",
+    "dill", "requests", "urllib",
+}
+
+# Safety thresholds
+MAX_IMPORTS = 12
+MAX_LOOP_DEPTH = 4
+
+
+# ---------------------------------------------------------------------------
+# AST Validator
+# ---------------------------------------------------------------------------
+
+class _Validator(ast.NodeVisitor):
+    """AST walker enforcing import, call, and naming safety rules."""
+
+    def __init__(self, allowlist: Iterable[str]):
+        super().__init__()
+        self.allowlist = set(allowlist)
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
+        self.import_count = 0
+        self.loop_depth = 0
+
+    def _err(self, msg: str) -> None:
+        self.errors.append(msg)
+
+    def _warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+
+    # -------------------------------
+    # Helpers: complex dtype detection
+    # -------------------------------
+    def _node_contains_complex(self, node: ast.AST) -> bool:
+        """Return True if the AST node subtree refers to complex dtype.
+
+        Matches any of the following patterns:
+        - Name 'complex' (built-in complex)
+        - Attribute whose attr startswith 'complex' (e.g., np.complex, complex64, complex128)
+        - Constant string containing 'complex' (e.g., "complex128")
+        """
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id == "complex":
+                return True
+            if isinstance(sub, ast.Attribute) and isinstance(sub.attr, str) and sub.attr.lower().startswith("complex"):
+                return True
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and "complex" in sub.value.lower():
+                return True
+        return False
+
+    # -------------------------------
+    # Import Validation
+    # -------------------------------
+    def visit_Import(self, node: ast.Import) -> None:
+        self.import_count += 1
+        for alias in node.names:
+            root = (alias.name or "").split(".")[0]
+            if root not in self.allowlist:
+                self._err(f"Import not allowed: {alias.name}")
+            if root in FORBIDDEN_MODULE_PREFIXES:
+                self._err(f"Forbidden import: {alias.name}")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self.import_count += 1
+        mod = node.module or ""
+        root = mod.split(".")[0]
+        if root not in self.allowlist:
+            self._err(f"Import from not allowed: {mod}")
+        if any(root == p or root.startswith(p + ".") for p in FORBIDDEN_MODULE_PREFIXES):
+            self._err(f"Forbidden import from: {mod}")
+        self.generic_visit(node)
+
+    # -------------------------------
+    # Function & Call Validation
+    # -------------------------------
+    def visit_Call(self, node: ast.Call) -> None:
+        # Forbid dangerous builtins
+        if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_NAMES:
+            self._err(f"Forbidden call: {node.func.id}")
+
+        # Forbid direct usage of complex() builtin or np.complex* as a callable
+        if (isinstance(node.func, ast.Name) and node.func.id == "complex") or (
+            isinstance(node.func, ast.Attribute) and isinstance(node.func.attr, str) and node.func.attr.lower().startswith("complex")
+        ):
+            self._err("Complex dtype is not allowed. Use float via pd.to_numeric(..., errors='coerce') instead.")
+
+        # Forbid dtype=complex or astype(complex)
+        # 1) dtype keyword anywhere
+        for kw in getattr(node, "keywords", []) or []:
+            if kw.arg == "dtype" and kw.value is not None and self._node_contains_complex(kw.value):
+                self._err("Complex dtype is not allowed (dtype=complex).")
+
+        # 2) astype(complex) or astype(np.complex*) patterns
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "astype":
+            # check positional first arg
+            if node.args:
+                if self._node_contains_complex(node.args[0]):
+                    self._err("Complex dtype is not allowed (astype(complex)).")
+            # or keyword dtype
+            for kw in getattr(node, "keywords", []) or []:
+                if kw.arg == "dtype" and kw.value is not None and self._node_contains_complex(kw.value):
+                    self._err("Complex dtype is not allowed (astype(dtype=complex)).")
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr.startswith("__") and node.attr.endswith("__"):
+            self._err("Use of dunder attributes is not allowed")
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id.startswith("__") and node.id.endswith("__"):
+            self._err("Use of dunder names is not allowed")
+        self.generic_visit(node)
+
+    # -------------------------------
+    # Structural Safety Checks
+    # -------------------------------
+    def visit_For(self, node: ast.For) -> None:
+        self.loop_depth += 1
+        if self.loop_depth > MAX_LOOP_DEPTH:
+            self._warn(f"Deeply nested loop detected (depth {self.loop_depth})")
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+    def visit_While(self, node: ast.While) -> None:
+        self.loop_depth += 1
+        if self.loop_depth > MAX_LOOP_DEPTH:
+            self._warn(f"Deeply nested loop detected (depth {self.loop_depth})")
+        self.generic_visit(node)
+        self.loop_depth -= 1
+
+
+# ---------------------------------------------------------------------------
+# Public Validation API
+# ---------------------------------------------------------------------------
+
+def validate_code(
+    code: str,
+    allowlist: Iterable[str] | None = None
+) -> Tuple[bool, List[str], List[str]]:
+    """
+    Validate Python code against structural and security rules.
+
+    Returns:
+        (is_valid, errors, warnings)
+    """
+    if not code or not isinstance(code, str):
+        return False, ["Empty or invalid code string."], []
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, [f"SyntaxError: {e}"], []
+
+    # Ensure required entrypoint exists
+    has_run_func = False
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            args = node.args.args
+            if len(args) >= 2 and args[0].arg == "df" and args[1].arg == "ctx":
+                has_run_func = True
+                break
+    if not has_run_func:
+        return False, ["Missing required function: def run(df, ctx):"], []
+
+    # Determine which allowlist to apply
+    allowlist_to_use = set(allowlist) if allowlist else set(ALLOWED_IMPORTS)
+    validator = _Validator(allowlist_to_use)
+    validator.visit(tree)
+
+    # Apply import/loop sanity warnings
+    if validator.import_count > MAX_IMPORTS:
+        validator._warn(f"Too many imports ({validator.import_count} > {MAX_IMPORTS})")
+
+    ok = len(validator.errors) == 0
+    return ok, validator.errors, validator.warnings
+
+
+def structured_validate(code: str) -> Dict[str, any]:
+    """
+    Return a structured dict for downstream use (e.g., LLM repair loop).
+    """
+    ok, errors, warnings = validate_code(code)
+    return {
+        "ok": ok,
+        "errors": errors,
+        "warnings": warnings,
+        "mode": _SANDBOX_MODE,
+        "allowed_imports": sorted(list(ALLOWED_IMPORTS)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stub Execution (compatibility placeholder)
+# ---------------------------------------------------------------------------
+
+def run_user_code_stub() -> dict:
+    """Simple placeholder result for systems not yet executing code."""
+    return {
+        "table": [{"category": "A", "value": 1}, {"category": "B", "value": 2}],
+        "metrics": {},
+        "chartData": {
+            "kind": "bar",
+            "labels": ["A", "B"],
+            "series": [{"label": "Value", "data": [1, 2]}],
+        },
+        "message": f"Sandbox validation ready (mode={_SANDBOX_MODE}). Execution not yet implemented.",
+    }
+</file>
+
+<file path="tests/test_aliases.py">
+import pytest
+
+# Temporarily add the parent directory to the path to allow imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Now, import the module
+import aliases
+
+# Sample column list for testing
+COLUMN_NAMES = ["revenue", "revenue_diff", "quantity", "category", "department", "Customer Name"]
+
+# Test cases for resolve_column, covering all logic paths
+@pytest.mark.parametrize("alias, column_names, expected", [
+    # 1. Exact matches
+    ("revenue", COLUMN_NAMES, "revenue"),
+    ("Customer Name", COLUMN_NAMES, "Customer Name"),
+    
+    # 2. Alias matches (from ALIASES dict)
+    ("sales", COLUMN_NAMES, "revenue"),       # ALIASES["sales"] -> "revenue"
+    ("rev", COLUMN_NAMES, "revenue"),         # ALIASES["rev"] -> "revenue"
+    ("profit", COLUMN_NAMES, "revenue_diff"), # ALIASES["profit"] -> "revenue_diff"
+    ("qty", COLUMN_NAMES, "quantity"),        # ALIASES["qty"] -> "quantity"
+    ("cat", COLUMN_NAMES, "category"),        # ALIASES["cat"] -> "category"
+
+    # 3. Fuzzy matches (using difflib with cutoff=0.8)
+    ("revnue", COLUMN_NAMES, "revenue"),      # Typo, high similarity
+    ("departmen", COLUMN_NAMES, "department"),# Typo, high similarity
+    ("Cstomer Name", COLUMN_NAMES, "Customer Name"), # Typo, high similarity
+    
+    # 4. No match scenarios
+    ("Customer", COLUMN_NAMES, None),             # Partial word, similarity is too low for the 0.8 cutoff
+    ("nonexistent", COLUMN_NAMES, None),          # No possible match
+    ("sales", ["col1", "col2"], None),             # Alias exists, but its target ("revenue") is not in the column list
+    
+    # 5. Edge cases
+    (None, COLUMN_NAMES, None),                   # None input
+    ("revenue", [], None),                         # Empty column list
+])
+def test_resolve_column(alias, column_names, expected, monkeypatch):
+    """
+    Tests the resolve_column function with various aliases, column lists, and scenarios.
+    """
+    # Ensure the ALIASES dict is consistent for this test
+    test_aliases = {
+        "profit": "revenue_diff",
+        "sales": "revenue",
+        "rev": "revenue",
+        "qty": "quantity",
+        "count": "quantity",
+        "cat": "category",
+        "dept": "department",
+        "seg": "segment",
+    }
+    monkeypatch.setattr(aliases, "ALIASES", test_aliases)
+    assert aliases.resolve_column(alias, column_names) == expected
+</file>
+
+<file path="tests/test_analysis_toolkit.py">
+import pytest
+import pandas as pd
+import numpy as np
+
+# Temporarily add the parent directory to the path to allow imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Now, import the module
+import analysis_toolkit
+
+# Test cases for the run_aggregation function
+def test_run_aggregation_sum():
+    """
+    Tests the run_aggregation function with the 'sum' aggregation.
+    """
+    data = {'category': ['A', 'B', 'A', 'B'], 'value': [10, 20, 5, 15]}
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_aggregation(df, 'category', 'value', 'sum')
+    
+    # Expected output is sorted by the aggregated value, descending
+    expected_data = {'category': ['B', 'A'], 'value_sum': [35, 15]}
+    expected_df = pd.DataFrame(expected_data)
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+def test_run_aggregation_mean():
+    """
+    Tests the run_aggregation function with the 'mean' aggregation.
+    """
+    data = {'category': ['A', 'B', 'A', 'B'], 'value': [10, 20, 5, 15]}
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_aggregation(df, 'category', 'value', 'mean')
+
+    # Expected output is sorted by the aggregated value, descending
+    expected_data = {'category': ['B', 'A'], 'value_mean': [17.5, 7.5]}
+    expected_df = pd.DataFrame(expected_data)
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+# Test cases for the run_variance function
+def test_run_variance():
+    """
+    Tests the run_variance function.
+    """
+    data = {
+        'product': ['A', 'B', 'C'],
+        'sales_2023': [100, 200, 150],
+        'sales_2024': [110, 210, 140]
+    }
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_variance(df, 'product', 'sales_2023', 'sales_2024')
+
+    # Expected output is sorted by 'delta', descending
+    expected_data = {
+        'product': ['A', 'B', 'C'],
+        'sales_2023': [100, 200, 150],
+        'sales_2024': [110, 210, 140],
+        'delta': [10, 10, -10],
+        'pct_change': [10.0, 5.0, -6.666667]
+    }
+    # Note: The function sorts by delta, but since two values are the same, the original order of A and B is preserved.
+    expected_df = pd.DataFrame(expected_data).sort_values('delta', ascending=False, kind='mergesort').reset_index(drop=True)
+    pd.testing.assert_frame_equal(result_df, expected_df, atol=1e-6)
+
+# Test cases for the run_filter_and_sort function
+def test_run_filter_and_sort_ascending():
+    """
+    Tests the run_filter_and_sort function with ascending sort.
+    """
+    data = {'name': ['A', 'B', 'C', 'D'], 'value': [10, 5, 20, 15]}
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_filter_and_sort(df, 'value', ascending=True, limit=3)
+    expected_df = df.sort_values('value', kind='mergesort').head(3).reset_index(drop=True)
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+def test_run_filter_and_sort_descending():
+    """
+    Tests the run_filter_and_sort function with descending sort.
+    """
+    data = {'name': ['A', 'B', 'C', 'D'], 'value': [10, 5, 20, 15]}
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_filter_and_sort(df, 'value', ascending=False, limit=3)
+    expected_df = df.sort_values('value', ascending=False, kind='mergesort').head(3).reset_index(drop=True)
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+def test_run_filter_and_sort_with_filter():
+    """
+    Tests the run_filter_and_sort function with a filter applied.
+    """
+    data = {'name': ['A', 'B', 'C', 'A'], 'value': [10, 5, 20, 15]}
+    df = pd.DataFrame(data)
+    # Added missing ascending and limit arguments
+    result_df = analysis_toolkit.run_filter_and_sort(df, 'value', ascending=False, limit=10, filter_col='name', filter_val='A')
+    expected_df = df[df['name'] == 'A'].sort_values('value', ascending=False, kind='mergesort').reset_index(drop=True)
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+# Test cases for the run_describe function
+def test_run_describe():
+    """
+    Tests the run_describe function.
+    """
+    data = {'numeric': [1, 2, 3, 4, 5], 'text': ['A', 'B', 'C', 'D', 'E']}
+    df = pd.DataFrame(data)
+    result_df = analysis_toolkit.run_describe(df)
+    
+    # Expected output is the transposed description of numeric columns
+    expected_df = df.select_dtypes(include=["number"]).describe().transpose()
+    expected_df = expected_df.reset_index().rename(columns={"index": "column"})
+    pd.testing.assert_frame_equal(result_df, expected_df)
+</file>
+
+<file path="tests/test_gemini_client.py">
+import pytest
+from unittest.mock import patch, MagicMock
+import pandas as pd
+
+# Temporarily add the parent directory to the path to allow imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Now, import the module
+import gemini_client
+
+# Fixture to correctly mock the Gemini client dependencies
+@pytest.fixture
+def mock_gemini_client(monkeypatch):
+    """
+    Mocks the Gemini API key, configure function, and the GenerativeModel 
+    to prevent actual API calls and configuration errors.
+    """
+    # Patch the module-level _API_KEY variable directly
+    monkeypatch.setattr(gemini_client, "_API_KEY", "test-key")
+    
+    # Patch the genai.configure function to do nothing
+    monkeypatch.setattr(gemini_client.genai, "configure", lambda api_key: None)
+    
+    # Reset the _configured flag to ensure the mock setup runs
+    monkeypatch.setattr(gemini_client, "_configured", False)
+
+    with patch('gemini_client.genai.GenerativeModel') as mock_genai_model:
+        mock_response = MagicMock()
+        mock_response.text = "Default mocked response"
+        mock_genai_model.return_value.generate_content.return_value = mock_response
+        yield mock_genai_model
+
+# Test cases for format_final_response
+def test_format_final_response(mock_gemini_client):
+    """
+    Tests the format_final_response function.
+    """
+    question = "What are the total sales per region?"
+    df = pd.DataFrame({'region': ['North', 'South'], 'sales': [1000, 1500]})
+    
+    mock_response = MagicMock()
+    mock_response.text = "The total sales for the North region are 1000 and for the South region are 1500."
+    mock_gemini_client.return_value.generate_content.return_value = mock_response
+    
+    result = gemini_client.format_final_response(question, df)
+    
+    assert "summary" in result
+    assert result["summary"] == mock_response.text
+
+# Test cases for generate_summary
+def test_generate_summary(mock_gemini_client):
+    """
+    Tests the generate_summary function.
+    """
+    question = "Summarize the data"
+    table_sample = [{"col1": "a", "col2": 1}, {"col1": "b", "col2": 2}]
+    metrics = {"rows": 2, "columns": 2}
+    
+    mock_response = MagicMock()
+    mock_response.text = "This is a summary of the data."
+    mock_gemini_client.return_value.generate_content.return_value = mock_response
+    
+    summary = gemini_client.generate_summary(question, table_sample, metrics)
+    
+    assert summary == mock_response.text
+
+# Test cases for repair_code
+def test_repair_code(mock_gemini_client):
+    """
+    Tests the repair_code function.
+    """
+    question = "Fix this code"
+    schema_snippet = "col1: string, col2: int"
+    sample_rows = [{"col1": "a", "col2": 1}]
+    code_to_fix = "print(df.col1)"
+    error_msg = "NameError: name 'df' is not defined"
+
+    mock_response = MagicMock()
+    mock_response.text = "```python\ndef run(df, ctx):\n    print('hello')\n```"
+    mock_gemini_client.return_value.generate_content.return_value = mock_response
+    
+    repaired_code = gemini_client.repair_code(question, schema_snippet, sample_rows, code_to_fix, error_msg)
+    
+    assert "def run(df, ctx):" in repaired_code
+    assert "print('hello')" in repaired_code
+
+# Test cases for reconstruct_code_from_tool_call
+def test_reconstruct_code_from_tool_call():
+    """
+    Tests the reconstruct_code_from_tool_call function, which does not call the API.
+    """
+    tool = "AGGREGATE"
+    params = {"dimension": "region", "metric": "sales", "func": "sum"}
+    
+    code = gemini_client.reconstruct_code_from_tool_call(tool, params, "")
+    
+    assert "import pandas as pd" in code
+    assert "def run(df: pd.DataFrame, ctx: dict) -> dict:" in code
+    assert "df.groupby('region', dropna=False).agg({'sales': 'sum'}).reset_index()" in code
+    assert "return {" in code
+
+# Test cases for reconstruct_presentational_code
+def test_reconstruct_presentational_code(mock_gemini_client):
+    """
+    Tests the reconstruct_presentational_code function.
+    """
+    question = "Show me the code for the last analysis"
+    schema_snippet = "col1: string, col2: int"
+    sample_rows = [{"col1": "a", "col2": 1}]
+    last_exec_code = "print(df)"
+
+    mock_response = MagicMock()
+    mock_response.text = "```python\ndef run(df, ctx):\n    print(df)\n```"
+    mock_gemini_client.return_value.generate_content.return_value = mock_response
+    
+    code = gemini_client.reconstruct_presentational_code(question, schema_snippet, sample_rows, last_exec_code)
+    
+    assert "def run(df, ctx):" in code
+    assert "print(df)" in code
+</file>
+
+<file path="tests/test_main.py">
+import pytest
+from unittest.mock import patch, MagicMock
+
+# Temporarily add the parent directory to the path to allow imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Now, import the module
+import main
+
+# Test cases for the _origin_allowed function
+@pytest.mark.parametrize("origin, allowed_origins, expected", [
+    ("http://localhost:5173", {"http://localhost:5173", "https://example.com"}, True),
+    ("https://example.com", {"http://localhost:5173", "https://example.com"}, True),
+    ("http://disallowed.com", {"http://localhost:5173", "https://example.com"}, False),
+    (None, {"http://localhost:5173", "https://example.com"}, False),
+    ("http://localhost:5173", {}, False),
+])
+def test_origin_allowed(origin, allowed_origins, expected, monkeypatch):
+    """
+    Tests the _origin_allowed function with various origins and allowed lists.
+    """
+    monkeypatch.setattr(main, "ALLOWED_ORIGINS", allowed_origins)
+    assert main._origin_allowed(origin) == expected
+
+# Test cases for the _sign_gs_uri function
+@patch("main.storage.Client")
+@patch("main._impersonated_signing_credentials")
+def test_sign_gs_uri_valid(mock_creds, mock_storage_client):
+    """
+    Tests that _sign_gs_uri correctly generates a signed URL for a valid gs:// URI.
+    """
+    # Arrange
+    mock_blob = MagicMock()
+    mock_blob.generate_signed_url.return_value = "https://signed.url"
+    mock_bucket = MagicMock()
+    mock_bucket.blob.return_value = mock_blob
+    mock_storage_client.return_value.bucket.return_value = mock_bucket
+    mock_creds.return_value = "dummy-credentials"
+
+    # Act
+    signed_url = main._sign_gs_uri("gs://test-bucket/test-object")
+
+    # Assert
+    assert signed_url == "https://signed.url"
+    mock_storage_client.return_value.bucket.assert_called_with("test-bucket")
+    mock_bucket.blob.assert_called_with("test-object")
+    mock_blob.generate_signed_url.assert_called_once()
+
+@pytest.mark.parametrize("invalid_uri", [
+    "not-a-gs-uri",
+    "http://example.com/test.txt",
+    "",
+    None,
+])
+def test_sign_gs_uri_invalid_input(invalid_uri):
+    """
+    Tests that _sign_gs_uri returns the original URI if it's not a valid gs:// URI.
+    """
+    assert main._sign_gs_uri(invalid_uri) == invalid_uri
+
+@patch("main.storage.Client", side_effect=Exception("GCS error"))
+def test_sign_gs_uri_exception(mock_storage_client):
+    """
+    Tests that _sign_gs_uri returns the original URI when an exception occurs.
+    """
+    assert main._sign_gs_uri("gs://test-bucket/test-object") == "gs://test-bucket/test-object"
+</file>
+
+<file path="tests/test_sandbox_runner.py">
+import pytest
+
+# Temporarily add the parent directory to the path to allow imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Now, import the module
+import sandbox_runner
+
+# Test cases for validate_code, updated to match the implementation
+@pytest.mark.parametrize("code, expected_is_valid, expected_errors, expected_warnings", [
+    # 1. Valid code
+    (
+        "import pandas as pd\ndef run(df, ctx):\n    return {'table': [], 'metrics': {}, 'chartData': {}}",
+        True,
+        [],
+        []
+    ),
+    # 2. Missing run function
+    (
+        "import pandas as pd\nprint('hello')",
+        False,
+        ["Missing required function: def run(df, ctx):"],
+        []
+    ),
+    # 3. Disallowed import (os)
+    (
+        "import os\ndef run(df, ctx):\n    return {}",
+        False,
+        ["Import not allowed: os", "Forbidden import: os"], # It flags both
+        []
+    ),
+    # 4. Malformed code (SyntaxError)
+    (
+        "def run(df, ctx):\n  print('hello'",
+        False,
+        # This error message can be version-specific. Using the one from the test environment.
+        ["SyntaxError: '(' was never closed (<unknown>, line 2)"],
+        []
+    ),
+    # 5. Allowed imports in 'rich' mode
+    (
+        "import pandas\nimport numpy\nimport math\nimport matplotlib\ndef run(df, ctx):\n    return {}",
+        True,
+        [],
+        []
+    ),
+    # 6. Forbidden function call (eval)
+    (
+        "def run(df, ctx):\n    eval('1+1')",
+        False,
+        ["Forbidden call: eval"],
+        []
+    ),
+    # 7. Use of dunder attribute
+    (
+        "def run(df, ctx):\n    print(df.__class__)",
+        False,
+        ["Use of dunder attributes is not allowed"],
+        []
+    ),
+    # 8. Use of complex dtype (which is disallowed)
+    (
+        "def run(df, ctx):\n    df['new'] = df['col'].astype('complex128')",
+        False,
+        ["Complex dtype is not allowed (astype(complex))."],
+        []
+    ),
+])
+def test_validate_code(code, expected_is_valid, expected_errors, expected_warnings, monkeypatch):
+    """
+    Tests the validate_code function with various code snippets.
+    """
+    # Ensure we are in 'rich' mode to allow matplotlib etc.
+    monkeypatch.setattr(sandbox_runner, "_SANDBOX_MODE", "rich")
+    # Reloading the allowed imports based on the mode
+    monkeypatch.setattr(sandbox_runner, "ALLOWED_IMPORTS", set(sandbox_runner.ALLOWED_IMPORTS_BASE).union(sandbox_runner.ALLOWED_IMPORTS_RICH))
+    
+    is_valid, errors, warnings = sandbox_runner.validate_code(code)
+    
+    assert is_valid == expected_is_valid
+    # Sort lists to ensure comparison is order-independent
+    assert sorted(errors) == sorted(expected_errors)
+    assert sorted(warnings) == sorted(expected_warnings)
+</file>
+
+<file path="tests/test_worker.py">
+import pytest
+import json
+import base64
+import pandas as pd
+import subprocess
+import sys
+import io
+import textwrap
+
+# Temporarily add the parent directory to the path to allow imports
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Get the path to the worker script
+WORKER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'worker.py'))
+
+# Sample DataFrame for testing, encoded as Parquet
+@pytest.fixture
+def sample_parquet_b64():
+    """
+    Provides a base64-encoded Parquet representation of a sample DataFrame.
+    """
+    df = pd.DataFrame({'col1': [1, 2], 'col2': ['A', 'B']})
+    buffer = io.BytesIO()
+    df.to_parquet(buffer)
+    return base64.b64encode(buffer.getvalue()).decode('ascii')
+
+# Test cases for the worker script using subprocess
+def test_worker_success(sample_parquet_b64):
+    """
+    Tests the worker script with a valid code snippet that should execute successfully.
+    """
+    # Use textwrap.dedent to remove leading whitespace from the code string
+    code = textwrap.dedent("""
+        def run(df, ctx):
+            return {
+                'table': df.to_dict(orient='records'),
+                'metrics': {'rows': len(df)},
+                'chartData': {}
+            }
+    """)
+    input_data = json.dumps({
+        "code": code,
+        "parquet_b64": sample_parquet_b64,
+        "ctx": {"question": "test"}
+    })
+    
+    result = subprocess.run(
+        [sys.executable, WORKER_PATH],
+        input=input_data,
+        capture_output=True,
+        text=True
+    )
+    
+    assert result.returncode == 0, f"Worker script failed with stderr: {result.stderr}"
+    output = json.loads(result.stdout)
+    
+    assert "error" not in output, f"Expected no error, but got: {output.get('error')}"
+    assert output["table"] == [{'col1': 1, 'col2': 'A'}, {'col1': 2, 'col2': 'B'}]
+    assert output["metrics"] == {'rows': 2}
+
+def test_worker_execution_error(sample_parquet_b64):
+    """
+    Tests that the worker catches a runtime error from the user code.
+    The error is a NameError because ValueError is not in the sandboxed scope.
+    """
+    code = "def run(df, ctx):\n    raise ValueError('Test Error')"
+    input_data = json.dumps({
+        "code": code,
+        "parquet_b64": sample_parquet_b64,
+        "ctx": {}
+    })
+    
+    result = subprocess.run(
+        [sys.executable, WORKER_PATH],
+        input=input_data,
+        capture_output=True,
+        text=True
+    )
+
+    assert result.returncode == 0, f"Worker script failed with stderr: {result.stderr}"
+    output = json.loads(result.stdout)
+    
+    assert "error" in output
+    # The sandbox has restricted builtins, so this will raise a NameError, not a ValueError.
+    # This is the correct behavior to test.
+    assert "name 'ValueError' is not defined" in output["error"]
+
+def test_worker_invalid_json_input():
+    """
+    Tests the worker with malformed JSON input.
+    The script should exit with a non-zero status code and report to stderr.
+    """
+    input_data = "not valid json"
+    
+    result = subprocess.run(
+        [sys.executable, WORKER_PATH],
+        input=input_data,
+        capture_output=True,
+        text=True
+    )
+    
+    assert result.returncode != 0
+    assert "Invalid input payload" in result.stderr
+
+def test_worker_missing_keys_in_input(sample_parquet_b64):
+    """
+    Tests the worker with valid JSON but missing required keys.
+    The script should exit with a non-zero code and report to stderr.
+    """
+    input_data = json.dumps({"parquet_b64": sample_parquet_b64}) # Missing 'code'
+    
+    result = subprocess.run(
+        [sys.executable, WORKER_PATH],
+        input=input_data,
+        capture_output=True,
+        text=True
+    )
+
+    assert result.returncode != 0
+    assert "Missing 'code' field" in result.stderr
+</file>
+
+<file path="worker.py">
+#!/usr/bin/env python3
+"""
+Worker process to safely execute LLM-generated analysis code in a sandboxed environment.
+
+This script is launched as a subprocess by the orchestrator. It receives JSON via stdin:
+{
+  "code": "<python source>",
+  "parquet_b64": "<base64 bytes>" | optional,
+  "arrow_ipc_b64": "<base64 bytes>" | optional,
+  "parquet_path": "/tmp/cleaned.parquet" | optional,
+  "ctx": { ... }
+}
+
+Steps:
+1. Validate code with sandbox_runner.
+2. Load the dataset into a DataFrame.
+3. Execute the validated run(df, ctx) safely.
+4. Sanitize and normalize the result for JSON output.
+
+It always prints a JSON payload to stdout and exits with 0 unless the payload is malformed.
+"""
+from __future__ import annotations
+
+import io
+import json
+import base64
+import sys
+import signal
+import traceback
+import os
+from typing import Any
+
+import pandas as pd
+import numpy as np
+import pyarrow as pa  # type: ignore
+
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Try to import sandbox validator (preferred)
+try:
+    from sandbox_runner import structured_validate, ALLOWED_IMPORTS as SANDBOX_ALLOWED_IMPORTS
+except Exception:
+    SANDBOX_ALLOWED_IMPORTS = {
+        "pandas", "numpy", "matplotlib", "seaborn",
+        "math", "statistics", "json", "io", "itertools", "functools",
+        "collections", "re", "datetime", "base64"
+    }
+    structured_validate = None  # fallback
+
+
+# --------------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------------
+ALLOWED_IMPORTS = set(SANDBOX_ALLOWED_IMPORTS)
+CODE_TIMEOUT = int(os.getenv("CODE_TIMEOUT", "60"))
+MAX_MEMORY_BYTES = int(os.getenv("CODE_MAX_MEMORY_BYTES", str(512 * 1024 * 1024)))  # 512MB
+try:
+    import resource
+except Exception:
+    resource = None
+
+
+# --------------------------------------------------------------------------
+# Utilities
+# --------------------------------------------------------------------------
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively replaces NaN/Inf with None for Firestore/JSON compatibility."""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    if isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    return obj
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = (name.split(".") or [name])[0]
+    if root not in ALLOWED_IMPORTS:
+        raise ImportError(f"Import not allowed: {name}")
+    return _orig_import(name, globals, locals, fromlist, level)
+
+
+def _prepare_globals() -> dict:
+    """Prepare restricted globals for execution."""
+    import builtins as _builtins
+    safe_builtins = {
+        b: getattr(_builtins, b)
+        for b in [
+            "abs", "all", "any", "bool", "dict", "enumerate", "filter",
+            "float", "int", "len", "list", "map", "max", "min", "pow",
+            "range", "round", "set", "slice", "sorted", "str", "sum",
+            "zip", "print", "isinstance", "getattr", "hasattr", "type",
+        ]
+        if hasattr(_builtins, b)
+    }
+    safe_builtins["__import__"] = _safe_import
+    return {"__builtins__": safe_builtins, "pd": pd, "np": np, "plt": plt, "sns": sns, "RESULT": None}
+
+
+def _set_resource_limits():
+    """Apply memory and CPU limits (POSIX only)."""
+    if resource is None:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (MAX_MEMORY_BYTES, MAX_MEMORY_BYTES))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (CODE_TIMEOUT + 5, CODE_TIMEOUT + 5))
+    except Exception:
+        pass
+
+
+class _TimeoutException(Exception):
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise _TimeoutException("User code timed out")
+
+
+def _load_dataframe(payload: dict) -> pd.DataFrame:
+    """Load df from base64 Parquet/Arrow or path."""
+    if payload.get("arrow_ipc_b64"):
+        ipc_bytes = base64.b64decode(payload["arrow_ipc_b64"])
+        with pa.ipc.open_stream(io.BytesIO(ipc_bytes)) as reader:
+            table = reader.read_all()
+        return table.to_pandas()
+    if payload.get("parquet_b64"):
+        data = base64.b64decode(payload["parquet_b64"])
+        return pd.read_parquet(io.BytesIO(data))
+    if payload.get("parquet_path"):
+        return pd.read_parquet(payload["parquet_path"])
+    raise ValueError("Missing data payload: no parquet_b64, arrow_ipc_b64, or parquet_path provided")
+
+
+def _fallback_result(df: pd.DataFrame, ctx: dict) -> dict:
+    """Fallback minimal result when code fails."""
+    row_limit = int((ctx or {}).get("row_limit", 200))
+    return {
+        "table": df.head(row_limit).to_dict(orient="records"),
+        "metrics": {"rows": len(df), "columns": len(df.columns)},
+        "chartData": {},
+        "message": "Fallback result generated due to code execution failure."
+    }
+
+
+# --------------------------------------------------------------------------
+# Main Execution
+# --------------------------------------------------------------------------
+def main() -> int:
+    global _orig_import
+    import builtins as _builtins
+    _orig_import = _builtins.__import__
+
+    # Step 1: Read payload
+    try:
+        payload = json.load(sys.stdin)
+        code = payload.get("code", "")
+        ctx = payload.get("ctx", {}) or {}
+        if not code:
+            raise ValueError("Missing 'code' field in payload")
+    except Exception as e:
+        sys.stderr.write(f"Invalid input payload: {e}\n")
+        return 1
+
+    # Step 2: Validate code via sandbox_runner
+    try:
+        if structured_validate:
+            validation = structured_validate(code)
+            if not validation.get("ok", False):
+                output = {
+                    "table": [],
+                    "metrics": {},
+                    "chartData": {},
+                    "error": "Validation failed",
+                    "validation": validation,
+                }
+                print(json.dumps(output, ensure_ascii=False))
+                return 0
+    except Exception as e:
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Validator error: {e}",
+        }
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    # Step 3: Load DataFrame
+    try:
+        df = _load_dataframe(payload)
+    except Exception as e:
+        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Failed to load data: {e}"}
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    # Step 4: Execute code safely
+    globs = _prepare_globals()
+    locs: dict = {}
+
+    _set_resource_limits()
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(CODE_TIMEOUT)
+
+    try:
+        compiled = compile(code, filename="<user_code>", mode="exec")
+        exec(compiled, globs, locs)
+
+        run_func = locs.get("run") or globs.get("run")
+        if not callable(run_func):
+            raise RuntimeError("Missing required function: def run(df, ctx):")
+
+        result = run_func(df, ctx)
+        if result is None:
+            result = globs.get("RESULT")
+
+        # Normalize
+        if isinstance(result, pd.DataFrame):
+            result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {}}
+        elif isinstance(result, list):
+            result = {"table": result, "metrics": {}, "chartData": {}}
+        elif not isinstance(result, dict):
+            result = _fallback_result(df, ctx)
+
+        # Map plural keys to canonical ones when needed
+        if isinstance(result, dict):
+            # tables -> table (choose first reasonable table)
+            if "table" not in result and "tables" in result:
+                tables = result.get("tables")
+                table_rows = None
+                try:
+                    if isinstance(tables, list) and len(tables) > 0:
+                        first = tables[0]
+                        if isinstance(first, pd.DataFrame):
+                            table_rows = first.to_dict(orient="records")
+                        elif isinstance(first, list):
+                            table_rows = first
+                        elif isinstance(first, dict):
+                            table_rows = [first]
+                    elif isinstance(tables, dict) and len(tables) > 0:
+                        for v in tables.values():
+                            if isinstance(v, pd.DataFrame):
+                                table_rows = v.to_dict(orient="records")
+                                break
+                            elif isinstance(v, list):
+                                table_rows = v
+                                break
+                            elif isinstance(v, dict):
+                                table_rows = [v]
+                                break
+                except Exception:
+                    table_rows = None
+                if table_rows is not None:
+                    result["table"] = table_rows
+
+            # charts -> chartData (choose first chart-like dict)
+            if "chartData" not in result and "charts" in result:
+                charts = result.get("charts")
+                chosen = None
+                if isinstance(charts, dict):
+                    chosen = charts
+                elif isinstance(charts, list) and len(charts) > 0:
+                    chosen = charts[0]
+                if isinstance(chosen, dict):
+                    result["chartData"] = chosen
+
+        # Ensure required keys
+        result.setdefault("table", df.head(int(ctx.get("row_limit", 200))).to_dict(orient="records"))
+        result.setdefault("metrics", {"rows": len(df), "columns": len(df.columns)})
+        result.setdefault("chartData", {})
+
+        sanitized = sanitize_for_json(result)
+        print(json.dumps(sanitized, ensure_ascii=False))
+        return 0
+
+    except _TimeoutException:
+        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Execution timed out after {CODE_TIMEOUT}s."}
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    except Exception as e:
+        tb = traceback.format_exc(limit=8)
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Runtime error: {e}",
+            "traceback": tb,
+        }
+        print(json.dumps(output, ensure_ascii=False))
+        return 0
+
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+</file>
+
+</files>

@@ -81,9 +81,10 @@ def generate_analysis_code(
 
     text = _safe_response_text(resp)
     code = _extract_code_block(text)
-
-    # Accept 'def run (df, ctx):' with arbitrary whitespace
     if not code or not re.search(r"def\s+run\s*\(", code):
+        alt = _extract_any_python_block(text)
+        if alt:
+            return _wrap_into_run_if_needed(alt)
         raise RuntimeError("CODEGEN_FAILED: Missing valid 'def run(df, ctx):' implementation.")
     return code
 
@@ -250,6 +251,12 @@ def repair_code(
     text = _safe_response_text(resp)
     code = _extract_code_block(text)
     if not code or not re.search(r"def\s+run\s*\(", code):
+        alt = _extract_any_python_block(text)
+        if alt:
+            return _wrap_into_run_if_needed(alt)
+        # As last resort, wrap the raw text
+        if text:
+            return _wrap_into_run_if_needed(text)
         raise RuntimeError("REPAIR_FAILED: Missing valid 'def run(df, ctx):' implementation.")
     return code
 
@@ -287,6 +294,27 @@ def _extract_any_python_block(text: str) -> str:
     if m:
         return m.group(1).strip()
     return text.strip()
+
+
+def _wrap_into_run_if_needed(code: str) -> str:
+    """Ensure returned code defines def run(df, ctx). If not, wrap the snippet."""
+    if isinstance(code, str) and re.search(r"def\s+run\s*\(", code):
+        return code
+    snippet = (code or "").strip()
+    indent = "    "
+    body = "\n".join(indent + line for line in snippet.splitlines()) if snippet else f"{indent}result_df = df"
+    wrapped = (
+        "def run(df, ctx):\n"
+        f"{indent}row_limit = int((ctx or {{}}).get('row_limit', 200))\n"
+        f"{body}\n"
+        f"{indent}try:\n"
+        f"{indent*2}result_df\n"
+        f"{indent}except NameError:\n"
+        f"{indent*2}result_df = df\n"
+        f"{indent}table = result_df.head(row_limit)\n"
+        f"{indent}return {{'table': table.to_dict(orient='records'), 'metrics': {{'rows': len(df), 'columns': len(df.columns)}}, 'chartData': {{}}}}\n"
+    )
+    return wrapped
 
 
 def generate_presentational_code(
@@ -389,20 +417,80 @@ def classify_intent(
     Returns: {"intent": str, "params": dict, "confidence": float}
     On failure, returns UNKNOWN with confidence 0.0.
     """
-    # Build tools in Gemini format (function_declarations)
+    # Ensure client configured (API key) even if other functions haven't been called yet
+    try:
+        _ensure_model()
+    except Exception:
+        pass
+
+    # Build tools in Gemini format (function_declarations) with Gemini Schema casing
+    def _to_gemini_schema(js: dict | None) -> dict:
+        if not isinstance(js, dict):
+            return {"type": "OBJECT"}
+        t = str(js.get("type", "object")).lower()
+        type_map = {
+            "object": "OBJECT",
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+            "array": "ARRAY",
+        }
+        out: dict = {"type": type_map.get(t, "OBJECT")}
+        # properties
+        if "properties" in js and isinstance(js.get("properties"), dict):
+            out["properties"] = {k: _to_gemini_schema(v) for k, v in js["properties"].items()}
+        # items for arrays
+        if "items" in js:
+            out["items"] = _to_gemini_schema(js.get("items"))
+        # enum
+        if "enum" in js:
+            out["enum"] = list(js.get("enum") or [])
+        # required
+        if "required" in js:
+            out["required"] = list(js.get("required") or [])
+        # minimum/maximum/default passthrough (non-breaking)
+        for k in ("minimum", "maximum", "default", "description"):
+            if k in js:
+                out[k] = js[k]
+        return out
+
     function_declarations = []
     for t in tool_spec or []:
+        name = t.get("name")
+        if not name:
+            continue
+        params_js = t.get("parameters", {"type": "object"})
         fn = {
-            "name": t.get("name"),
+            "name": name,
             "description": t.get("description", ""),
-            "parameters": t.get("parameters", {"type": "object"}),
+            "parameters": _to_gemini_schema(params_js),
         }
-        if fn["name"]:
-            function_declarations.append(fn)
+        function_declarations.append(fn)
     tools_payload = [{"function_declarations": function_declarations}] if function_declarations else None
 
-    # Instantiate a model with tools
-    model_with_tools = genai.GenerativeModel(_MODEL_NAME, tools=tools_payload)
+    def _build_model_with_tools(model_name: str):
+        """Instantiate a GenerativeModel with tools using types when available."""
+        # Preferred: typed Tool(FunctionDeclaration(Schema))
+        try:
+            types = getattr(genai, "types", None)
+            Tool = getattr(types, "Tool", None)
+            FunctionDeclaration = getattr(types, "FunctionDeclaration", None)
+            Schema = getattr(types, "Schema", None)
+            if Tool and FunctionDeclaration and Schema and function_declarations:
+                fns = []
+                for fd in function_declarations:
+                    fns.append(FunctionDeclaration(
+                        name=fd.get("name"),
+                        description=fd.get("description", ""),
+                        parameters=Schema(**fd.get("parameters", {"type": "OBJECT"}))
+                    ))
+                tool_obj = Tool(function_declarations=fns)
+                return genai.GenerativeModel(model_name, tools=[tool_obj])
+        except Exception:
+            pass
+        # Fallback: dict tools
+        return genai.GenerativeModel(model_name, tools=tools_payload)
 
     sample_preview = sample_rows[: min(len(sample_rows), 3)]
     hint_block = (hinting or "").strip()
@@ -414,43 +502,113 @@ def classify_intent(
         "- Only call a tool if one call can fully and accurately answer the entire question.\n"
         "- AGGREGATE supports exactly one metric. If the user asks for multiple metrics in one grouped table, DO NOT call any function.\n"
         "- If the request would require TWO OR MORE tools (e.g., filter + pivot), DO NOT call any function.\n"
-        "- If unsure, do not call any function.\n\n"
+        "- If the only uncertainty is column name capitalization or minor aliasing, choose the closest dataset column (case-insensitive) and proceed.\n"
+        "- If unsure for any other reason, do not call any function.\n\n"
         f"SCHEMA (truncated):\n{schema_snippet}\n\n"
         f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"
         f"HINTS:\n{hint_block}\n\n"
         f"QUESTION:\n{question}\n"
     )
 
+    def _try_once(model_name: str) -> dict | None:
+        try:
+            mdl = _build_model_with_tools(model_name)
+            # Try new-style tool_config first
+            try:
+                resp = mdl.generate_content(
+                    prompt,
+                    generation_config={
+                        "max_output_tokens": 2048,
+                        "temperature": 0.0,
+                    },
+                    tool_config={"function_calling_config": {"mode": "ANY"}},
+                )
+            except Exception:
+                # Fallback to older style
+                resp = mdl.generate_content(
+                    prompt,
+                    generation_config={
+                        "max_output_tokens": 2048,
+                        "temperature": 0.0,
+                    },
+                    tool_config={"function_calling_config": "ANY"},
+                )
+            if getattr(resp, "candidates", None):
+                for c in resp.candidates:
+                    content = getattr(c, "content", None)
+                    parts = getattr(content, "parts", None) if content else None
+                    if not parts:
+                        continue
+                    for p in parts:
+                        fc = getattr(p, "function_call", None) or getattr(p, "functionCall", None)
+                        if fc and getattr(fc, "name", None):
+                            name = str(fc.name)
+                            try:
+                                args = dict(getattr(fc, "args", {}) or {})
+                            except Exception:
+                                args = {}
+                            return {"intent": name, "params": args, "confidence": 0.95}
+            return None
+        except Exception:
+            return None
+
+    tried = set()
+    candidates = [_MODEL_NAME]
+    override = os.getenv("CLASSIFIER_MODEL_OVERRIDE", "").strip()
+    if override:
+        candidates.append(override)
+    # Known-good for tool calls
+    candidates.append("gemini-1.5-flash")
+    for mn in candidates:
+        if not mn or mn in tried:
+            continue
+        tried.add(mn)
+        out = _try_once(mn)
+        if out:
+            return out
+    # Heuristic fallback: simple parser for common single-step asks
     try:
-        resp = model_with_tools.generate_content(
-            prompt,
-            generation_config={
-                "max_output_tokens": 2048,
-                "temperature": 0.0,
-            },
-            tool_config={"function_calling_config": "ANY"},
-        )
-        # Find first function_call
-        if getattr(resp, "candidates", None):
-            for c in resp.candidates:
-                content = getattr(c, "content", None)
-                parts = getattr(content, "parts", None) if content else None
-                if not parts:
-                    continue
-                for p in parts:
-                    fc = getattr(p, "function_call", None)
-                    if fc and getattr(fc, "name", None):
-                        name = str(fc.name)
-                        # args may be a dict-like
-                        try:
-                            args = dict(getattr(fc, "args", {}) or {})
-                        except Exception:
-                            args = {}
-                        return {"intent": name, "params": args, "confidence": 0.95}
-        # If no function call, return UNKNOWN
-        return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+        q = (question or "").strip()
+        ql = q.lower()
+        cols: list[str] = []
+        try:
+            h = json.loads(hinting or "{}") if isinstance(hinting, str) else (hinting or {})
+            if isinstance(h, dict) and isinstance(h.get("columns"), list):
+                cols = [str(c) for c in h.get("columns")]
+        except Exception:
+            cols = []
+
+        def best_col(token: str) -> str | None:
+            if not token:
+                return None
+            tl = token.strip().lower()
+            if not tl:
+                return None
+            for c in cols:
+                if c.lower() == tl:
+                    return c
+            for c in cols:
+                if tl in c.lower():
+                    return c
+            return None
+
+        # sum/total pattern with optional "by <dim>"
+        m = re.search(r"\b(sum|total)\s+of\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b", ql)
+        if not m:
+            m = re.search(r"\b(sum|total)\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b", ql)
+        if m:
+            metric_tok = m.group(2).strip()
+            dim_tok = (m.group(3) or "").strip()
+            metric_col = best_col(metric_tok)
+            dim_col = best_col(dim_tok) if dim_tok else None
+            if metric_col and dim_col:
+                return {"intent": "run_aggregation", "params": {"dimension": dim_col, "metric": metric_col, "func": "sum"}, "confidence": 0.7}
+            if metric_col:
+                return {"intent": "sum_column", "params": {"column": metric_col}, "confidence": 0.7}
     except Exception:
-        return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+        pass
+
+    return {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
 
 
 def is_show_code_request(question: str) -> dict:

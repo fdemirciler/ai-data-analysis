@@ -302,6 +302,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             "pivot_table": "PIVOT",
             "percentile": "PERCENTILE",
             "outliers": "OUTLIERS",
+            # simple global aggregate
+            "sum_column": "SUM_COLUMN",
         }
         intent = name_map.get(str(raw_intent), str(raw_intent).upper())
 
@@ -366,6 +368,9 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 if i == "OUTLIERS":
                     resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
                     return bool(resolved.get("column")), resolved
+                if i == "SUM_COLUMN":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    return bool(resolved.get("column")), resolved
             except Exception:
                 return False, resolved
             return False, resolved
@@ -410,6 +415,11 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 is_fastpath_candidate = params_ok and (
                     confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold
                 )
+        elif intent in {"FILTER", "SORT", "VALUE_COUNTS", "TOP_N_PER_GROUP", "PIVOT", "PERCENTILE", "OUTLIERS", "SUM_COLUMN"}:
+            # For new deterministic intents, accept with same policy: params_ok + threshold
+            is_fastpath_candidate = params_ok and (
+                confidence >= MIN_FASTPATH_CONFIDENCE or confidence >= soft_threshold
+            )
 
         # Optional SSE for debugging (no data rows logged)
         if os.getenv("LOG_CLASSIFIER_RESPONSE") == "1":
@@ -484,6 +494,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         if intent_name == "PERCENTILE":
                             return [c for c in [rp.get("column")] if c]
                         if intent_name == "OUTLIERS":
+                            return [c for c in [rp.get("column")] if c]
+                        if intent_name == "SUM_COLUMN":
                             return [c for c in [rp.get("column")] if c]
                         return None
 
@@ -561,6 +573,11 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                             column=resolved_params.get("column"),
                             method=str(resolved_params.get("method") or "iqr"),
                             k=resolved_params.get("k", 1.5),
+                        )
+                    elif intent == "SUM_COLUMN":
+                        res_df = analysis_toolkit.sum_column(
+                            df,
+                            column=resolved_params.get("column"),
                         )
                     else:
                         res_df = analysis_toolkit.run_describe(df)

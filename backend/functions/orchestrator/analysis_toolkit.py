@@ -245,6 +245,17 @@ def outliers(df: pd.DataFrame, column: str, method: str = "iqr", k: Any = 1.5) -
     return df[mask].reset_index(drop=True)
 
 
+def sum_column(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Compute the total (sum) of a numeric column without grouping.
+
+    Returns a single-row DataFrame with columns: ["metric", "value"].
+    """
+    _require_columns(df, column)
+    s = safe_numeric_cast(df[column])
+    total = float(np.nansum(s.to_numpy(dtype=float)))
+    return pd.DataFrame({"metric": [f"Total {column}"], "value": [total]})
+
+
 # Tools spec for Gemini native function-calling (snake_case)
 TOOLS_SPEC = [
     {
@@ -391,6 +402,17 @@ TOOLS_SPEC = [
                 "column": {"type": "string"},
                 "method": {"type": "string", "enum": ["iqr", "zscore"], "default": "iqr"},
                 "k": {"type": "number", "default": 1.5}
+            },
+            "required": ["column"]
+        }
+    },
+    {
+        "name": "sum_column",
+        "description": "Compute the total (sum) of a numeric column without grouping.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "column": {"type": "string"}
             },
             "required": ["column"]
         }

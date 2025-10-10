@@ -43,7 +43,7 @@ export function ChatSidebar({
       <aside
         className={cn(
           "fixed left-0 top-0 h-full bg-sidebar border-r border-sidebar-border transition-all duration-300 flex flex-col z-40",
-          isOpen ? "w-64" : "w-14"
+          isOpen ? "w-64" : "w-1"
         )}
       >
         {isOpen ? (

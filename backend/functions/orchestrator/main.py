@@ -289,10 +289,19 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
         # Map tool names to canonical intents
         name_map = {
+            # legacy
             "run_aggregation": "AGGREGATE",
             "run_variance": "VARIANCE",
             "run_filter_and_sort": "FILTER_SORT",
             "run_describe": "DESCRIBE",
+            # new tranche-1
+            "filter_rows": "FILTER",
+            "sort_rows": "SORT",
+            "value_counts": "VALUE_COUNTS",
+            "top_n_per_group": "TOP_N_PER_GROUP",
+            "pivot_table": "PIVOT",
+            "percentile": "PERCENTILE",
+            "outliers": "OUTLIERS",
         }
         intent = name_map.get(str(raw_intent), str(raw_intent).upper())
 
@@ -324,6 +333,39 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                     return bool(resolved.get("sort_col")), resolved
                 if i == "DESCRIBE":
                     return True, resolved
+                if i == "FILTER":
+                    flist = []
+                    for f in (p.get("filters") or []):
+                        col = aliases.resolve_column(f.get("column"), column_names) or f.get("column")
+                        flist.append({
+                            "column": col,
+                            "operator": f.get("operator"),
+                            "value": f.get("value"),
+                        })
+                    resolved["filters"] = flist
+                    return bool(flist), resolved
+                if i == "SORT":
+                    resolved["sort_by_column"] = aliases.resolve_column(p.get("sort_by_column"), column_names) or p.get("sort_by_column")
+                    return bool(resolved.get("sort_by_column")), resolved
+                if i == "VALUE_COUNTS":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    return bool(resolved.get("column")), resolved
+                if i == "TOP_N_PER_GROUP":
+                    resolved["group_by_column"] = aliases.resolve_column(p.get("group_by_column"), column_names) or p.get("group_by_column")
+                    resolved["metric_column"] = aliases.resolve_column(p.get("metric_column"), column_names) or p.get("metric_column")
+                    return bool(resolved.get("group_by_column") and resolved.get("metric_column")), resolved
+                if i == "PIVOT":
+                    resolved["index"] = aliases.resolve_column(p.get("index"), column_names) or p.get("index")
+                    resolved["columns"] = aliases.resolve_column(p.get("columns"), column_names) or p.get("columns")
+                    resolved["values"] = aliases.resolve_column(p.get("values"), column_names) or p.get("values")
+                    return bool(resolved.get("index") and resolved.get("columns") and resolved.get("values")), resolved
+                if i == "PERCENTILE":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    # p may be string or number; defer casting to toolkit
+                    return bool(resolved.get("column") and ("p" in p)), resolved
+                if i == "OUTLIERS":
+                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    return bool(resolved.get("column")), resolved
             except Exception:
                 return False, resolved
             return False, resolved
@@ -411,22 +453,41 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 yield _sse_format({"type": "error", "data": {"code": "DATA_READ_FAILED", "message": str(e)}})
             else:
                 try:
-                    # Determine needed columns
-                    needed_cols = None
-                    if intent == "AGGREGATE":
-                        dim = aliases.resolve_column(params.get("dimension"), column_names) or params.get("dimension")
-                        met = aliases.resolve_column(params.get("metric"), column_names) or params.get("metric")
-                        needed_cols = [c for c in [dim, met] if c]
-                    elif intent == "VARIANCE":
-                        dim = aliases.resolve_column(params.get("dimension"), column_names) or params.get("dimension")
-                        a = aliases.resolve_column(params.get("periodA"), column_names) or params.get("periodA")
-                        b = aliases.resolve_column(params.get("periodB"), column_names) or params.get("periodB")
-                        needed_cols = [c for c in [dim, a, b] if c]
-                    elif intent == "FILTER_SORT":
-                        sort_col = aliases.resolve_column(params.get("sort_col"), column_names) or params.get("sort_col")
-                        fcol = params.get("filter_col")
-                        fcol = aliases.resolve_column(fcol, column_names) if fcol else fcol
-                        needed_cols = [c for c in [sort_col, fcol] if c]
+                    # Determine needed columns using a central helper
+                    def _col_prune_disabled(intent_name: str) -> bool:
+                        flag = os.getenv(f"FASTPATH_DISABLE_COLUMN_PRUNE_{intent_name}", "0").lower()
+                        return flag in ("1", "true", "yes")
+
+                    def compute_needed_cols(intent_name: str, rp: dict) -> list[str] | None:
+                        if _col_prune_disabled(intent_name):
+                            return None
+                        if intent_name == "AGGREGATE":
+                            return [c for c in [rp.get("dimension"), rp.get("metric")] if c]
+                        if intent_name == "VARIANCE":
+                            return [c for c in [rp.get("dimension"), rp.get("periodA"), rp.get("periodB")] if c]
+                        if intent_name == "FILTER_SORT":
+                            return [c for c in [rp.get("sort_col"), rp.get("filter_col")] if c]
+                        if intent_name == "FILTER":
+                            cols = []
+                            for f in (rp.get("filters") or []):
+                                if f.get("column"):
+                                    cols.append(f["column"])
+                            return list(dict.fromkeys(cols)) or None
+                        if intent_name == "SORT":
+                            return [c for c in [rp.get("sort_by_column")] if c]
+                        if intent_name == "VALUE_COUNTS":
+                            return [c for c in [rp.get("column")] if c]
+                        if intent_name == "TOP_N_PER_GROUP":
+                            return [c for c in [rp.get("group_by_column"), rp.get("metric_column")] if c]
+                        if intent_name == "PIVOT":
+                            return [c for c in [rp.get("index"), rp.get("columns"), rp.get("values")] if c]
+                        if intent_name == "PERCENTILE":
+                            return [c for c in [rp.get("column")] if c]
+                        if intent_name == "OUTLIERS":
+                            return [c for c in [rp.get("column")] if c]
+                        return None
+
+                    needed_cols = compute_needed_cols(intent, resolved_params)
 
                     if needed_cols:
                         df = pd.read_parquet(io.BytesIO(parquet_bytes), columns=needed_cols)
@@ -437,10 +498,17 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
 
                     # Execute
                     if intent == "AGGREGATE":
+                        dim = resolved_params.get("dimension")
+                        met = resolved_params.get("metric")
                         res_df = analysis_toolkit.run_aggregation(df, dim, met, resolved_params.get("func", params.get("func", "sum")))
                     elif intent == "VARIANCE":
+                        dim = resolved_params.get("dimension")
+                        a = resolved_params.get("periodA")
+                        b = resolved_params.get("periodB")
                         res_df = analysis_toolkit.run_variance(df, dim, a, b)
                     elif intent == "FILTER_SORT":
+                        sort_col = resolved_params.get("sort_col")
+                        fcol = resolved_params.get("filter_col")
                         res_df = analysis_toolkit.run_filter_and_sort(
                             df,
                             sort_col=sort_col,
@@ -448,6 +516,51 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                             limit=int((resolved_params.get("limit") or params.get("limit") or 50)),
                             filter_col=fcol,
                             filter_val=resolved_params.get("filter_val", params.get("filter_val")),
+                        )
+                    elif intent == "FILTER":
+                        res_df = analysis_toolkit.filter_rows(df, filters=resolved_params.get("filters") or [])
+                    elif intent == "SORT":
+                        res_df = analysis_toolkit.sort_rows(
+                            df,
+                            sort_by_column=resolved_params.get("sort_by_column"),
+                            ascending=bool(resolved_params.get("ascending", False)),
+                            limit=int(resolved_params.get("limit") or 0),
+                        )
+                    elif intent == "VALUE_COUNTS":
+                        res_df = analysis_toolkit.value_counts(
+                            df,
+                            column=resolved_params.get("column"),
+                            top=int(resolved_params.get("top") or 100),
+                            include_pct=bool(resolved_params.get("include_pct", True)),
+                        )
+                    elif intent == "TOP_N_PER_GROUP":
+                        res_df = analysis_toolkit.top_n_per_group(
+                            df,
+                            group_by_column=resolved_params.get("group_by_column"),
+                            metric_column=resolved_params.get("metric_column"),
+                            n=int(resolved_params.get("n") or 5),
+                            ascending=bool(resolved_params.get("ascending", False)),
+                        )
+                    elif intent == "PIVOT":
+                        res_df = analysis_toolkit.pivot_table(
+                            df,
+                            index=resolved_params.get("index"),
+                            columns=resolved_params.get("columns"),
+                            values=resolved_params.get("values"),
+                            aggfunc=str(resolved_params.get("aggfunc") or "sum"),
+                        )
+                    elif intent == "PERCENTILE":
+                        res_df = analysis_toolkit.percentile(
+                            df,
+                            column=resolved_params.get("column"),
+                            p=resolved_params.get("p"),
+                        )
+                    elif intent == "OUTLIERS":
+                        res_df = analysis_toolkit.outliers(
+                            df,
+                            column=resolved_params.get("column"),
+                            method=str(resolved_params.get("method") or "iqr"),
+                            k=resolved_params.get("k", 1.5),
                         )
                     else:
                         res_df = analysis_toolkit.run_describe(df)

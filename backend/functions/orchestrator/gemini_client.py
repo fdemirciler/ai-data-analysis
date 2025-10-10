@@ -413,6 +413,7 @@ def classify_intent(
         "STRICT RULES:\n"
         "- Only call a tool if one call can fully and accurately answer the entire question.\n"
         "- AGGREGATE supports exactly one metric. If the user asks for multiple metrics in one grouped table, DO NOT call any function.\n"
+        "- If the request would require TWO OR MORE tools (e.g., filter + pivot), DO NOT call any function.\n"
         "- If unsure, do not call any function.\n\n"
         f"SCHEMA (truncated):\n{schema_snippet}\n\n"
         f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"

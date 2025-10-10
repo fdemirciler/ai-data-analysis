@@ -139,3 +139,5 @@ This section contains more technical details for developers working on the proje
 
 -   If the AI model returns an empty `metrics` object, it is persisted as is. The system only auto-fills metrics if the field is missing entirely.
 -   Charts are optional. If the analysis doesn't produce a chart, the corresponding data file may be empty.
+
+

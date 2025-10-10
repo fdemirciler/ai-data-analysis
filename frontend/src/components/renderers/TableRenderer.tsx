@@ -1,15 +1,81 @@
 import React from "react";
 import { ChevronsUpDown, ChevronUp, ChevronDown } from "lucide-react";
 
+type ColMeta = {
+  name: string;
+  isText: boolean;
+  isPercent: boolean;
+  orderIdx: number;
+};
+
+const isPercentName = (name: string) => {
+  const n = name.toLowerCase();
+  return (
+    n.includes("pct") ||
+    n.includes("percent") ||
+    n.includes("percentage") ||
+    n === "pct_change" ||
+    n.endsWith("_pct")
+  );
+};
+
+const formatNumber = (val: number, asPercent: boolean): string => {
+  const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+  const nf2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (asPercent) return `${nf2.format(val)}%`;
+  return Number.isInteger(val) ? nf0.format(val) : nf2.format(val);
+};
+
 export function TableRenderer({ rows }: { rows: any[] }) {
-  const cols: string[] = React.useMemo(() => {
+  const colMetas: ColMeta[] = React.useMemo(() => {
     if (!rows || rows.length === 0) return [];
-    const keys = new Set<string>();
-    for (const r of rows.slice(0, 50)) {
-      Object.keys(r || {}).forEach((k) => keys.add(k));
+    const sample = rows.slice(0, 50);
+    const seenOrder: Record<string, number> = {};
+    const metas: Record<string, ColMeta> = {} as any;
+    let idxCounter = 0;
+    for (const r of sample) {
+      Object.keys(r || {}).forEach((k) => {
+        if (!(k in seenOrder)) seenOrder[k] = idxCounter++;
+      });
     }
-    return Array.from(keys);
+    for (const [name, orderIdx] of Object.entries(seenOrder)) {
+      let isText = false;
+      let isPercent = isPercentName(name);
+      for (const row of sample) {
+        const v = (row as any)?.[name];
+        if (v === null || v === undefined) continue;
+        if (typeof v === "string") {
+          // string with % implies percent col if not flagged yet
+          if (v.trim().endsWith("%")) isPercent = true;
+          // treat as text if not purely numeric
+          const n = Number.parseFloat(v);
+          if (!Number.isFinite(n) || String(n) !== v.replace(/[,\s%]/g, "").trim()) {
+            isText = true;
+            break;
+          }
+        } else if (typeof v !== "number") {
+          isText = true;
+          break;
+        }
+      }
+      metas[name] = { name, isText, isPercent, orderIdx };
+    }
+    // Reorder: text first, prioritize 'metric' column to be first among text
+    const arr = Object.values(metas);
+    arr.sort((a, b) => {
+      const aMetric = a.name.toLowerCase() === "metric" ? 0 : 1;
+      const bMetric = b.name.toLowerCase() === "metric" ? 0 : 1;
+      const aGroup = a.isText ? 0 : 1;
+      const bGroup = b.isText ? 0 : 1;
+      if (aGroup !== bGroup) return aGroup - bGroup; // text first
+      if (aGroup === 0 && aMetric !== bMetric) return aMetric - bMetric; // 'metric' first within text
+      return a.orderIdx - b.orderIdx; // stable by first-seen order
+    });
+    return arr;
   }, [rows]);
+
+  const cols = React.useMemo(() => colMetas.map((m) => m.name), [colMetas]);
+  const metaByCol = React.useMemo(() => Object.fromEntries(colMetas.map((m) => [m.name, m])), [colMetas]);
 
   const [sortBy, setSortBy] = React.useState<string | null>(null);
   const [sortDir, setSortDir] = React.useState<"asc" | "desc">("asc");
@@ -53,6 +119,23 @@ export function TableRenderer({ rows }: { rows: any[] }) {
     );
   }
 
+  const renderCell = (col: string, value: any) => {
+    if (value === null || value === undefined) return "";
+    const meta = metaByCol[col];
+    const asPercent = !!meta?.isPercent;
+    if (typeof value === "number") return formatNumber(value, asPercent);
+    const s = String(value);
+    if (s.trim().endsWith("%")) {
+      // normalize percentage string to two decimals
+      const n = Number.parseFloat(s.replace(/%/g, ""));
+      if (Number.isFinite(n)) return `${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)}%`;
+      return s;
+    }
+    const n = Number.parseFloat(s.replace(/[,\s]/g, ""));
+    if (Number.isFinite(n)) return formatNumber(n, asPercent);
+    return s;
+  };
+
   return (
     <div className="relative inline-block max-w-full max-h-[420px] overflow-auto border rounded-xl">
       <table className="min-w-max text-sm">
@@ -88,7 +171,7 @@ export function TableRenderer({ rows }: { rows: any[] }) {
             <tr key={i} className="odd:bg-background hover:bg-muted/30">
               {cols.map((c) => (
                 <td key={c} className="px-3 py-2 whitespace-nowrap max-w-[320px] overflow-hidden text-ellipsis">
-                  {String(r?.[c] ?? "")}
+                  {renderCell(c, (r as any)?.[c])}
                 </td>
               ))}
             </tr>

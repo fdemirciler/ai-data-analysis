@@ -326,6 +326,9 @@ export default function App() {
       saveUserMessage(user.uid, convId, userMessage.id, content).catch(() => {});
     }
 
+    // Detect code-only intent (user asks only to show code)
+    const isCodeOnly = /\b(show|view|display|give|print)\b[^\n]*\bcode\b/i.test(content) || /\bcode only\b/i.test(content);
+
     // Start SSE stream
     setIsTyping(true);
     // Reset code insertion flag and code message id for this conversation/run
@@ -333,17 +336,22 @@ export default function App() {
     codeMsgIdByConvRef.current[convId] = null;
     const ac = new AbortController();
     abortRef.current = ac;
-    // Create and push assistant placeholder immediately
-    const placeholderId = `${convId}-${Date.now()}-ph`;
-    placeholderIdRef.current = placeholderId;
-    const placeholder: Message = {
-      id: placeholderId,
-      role: "assistant",
-      kind: "status",
-      content: "Analyzing...",
-      timestamp: new Date(),
-    };
-    setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, messages: [...c.messages, placeholder] } : c)));
+    // Create and push assistant placeholder unless it's a code-only request
+    let placeholderId: string | null = null;
+    if (!isCodeOnly) {
+      placeholderId = `${convId}-${Date.now()}-ph`;
+      placeholderIdRef.current = placeholderId;
+      const placeholder: Message = {
+        id: placeholderId,
+        role: "assistant",
+        kind: "status",
+        content: "Analyzing...",
+        timestamp: new Date(),
+      };
+      setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, messages: [...c.messages, placeholder] } : c)));
+    } else {
+      placeholderIdRef.current = null;
+    }
 
     const updatePlaceholder = (updater: (m: Extract<Message, { role: "assistant" }>) => Message) => {
       setConversations((prev) =>
@@ -367,6 +375,58 @@ export default function App() {
         question: content,
         signal: ac.signal,
         onEvent: (ev: ChatEvent) => {
+          if (isCodeOnly) {
+            if (ev.type === "code") {
+              const existingId = codeMsgIdByConvRef.current[convId] || null;
+              if (existingId) {
+                setConversations((prev) =>
+                  prev.map((c) => {
+                    if (c.id !== convId) return c;
+                    const msgs = c.messages.slice();
+                    const idx = msgs.findIndex((m) => m.id === existingId);
+                    if (idx >= 0) {
+                      const m = msgs[idx] as any;
+                      msgs[idx] = {
+                        ...m,
+                        code: ev.data.text,
+                        language: ev.data.language || "python",
+                        warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                        timestamp: new Date(),
+                      } as any;
+                    }
+                    return { ...c, messages: msgs };
+                  })
+                );
+              } else {
+                const newId = `${convId}-${Date.now()}-code`;
+                codeMsgIdByConvRef.current[convId] = newId;
+                setConversations((prev) =>
+                  prev.map((c) => {
+                    if (c.id !== convId) return c;
+                    const msgs = c.messages.slice();
+                    const codeMsg: Message = {
+                      id: newId,
+                      role: "assistant",
+                      timestamp: new Date(),
+                      kind: "code",
+                      code: ev.data.text,
+                      language: ev.data.language || "python",
+                      warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                    } as any;
+                    msgs.push(codeMsg);
+                    codeInsertedByConvRef.current[convId] = true;
+                    return { ...c, messages: msgs };
+                  })
+                );
+              }
+              // Stop typing indicator and close stream for code-only intent
+              setIsTyping(false);
+              try { abortRef.current?.abort(); } catch {}
+            }
+            // Ignore all other events when code-only is requested
+            return;
+          }
+
           if (ev.type === "validating") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Validating input..." }));
           else if (ev.type === "generating_code") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Generating analysis code..." }));
           else if (ev.type === "code") {

@@ -95,6 +95,12 @@ MIRROR_COMMAND_TO_FIRESTORE: bool = _env_bool("MIRROR_COMMAND_TO_FIRESTORE", Fal
 MIN_FASTPATH_CONFIDENCE: float = float(_getenv("MIN_FASTPATH_CONFIDENCE", "0.65"))
 ORCH_IPC_MODE: str = _getenv("ORCH_IPC_MODE", "base64").lower()
 
+# Embedding router (feature-flagged)
+EMBED_ROUTER_ENABLED: bool = _env_bool("EMBED_ROUTER_ENABLED", False)
+EMBED_MODEL: str = _getenv("EMBED_MODEL", "models/text-embedding-004")
+EMBED_TIMEOUT_SECONDS: float = float(_getenv("EMBED_TIMEOUT_SECONDS", "1.5"))
+EMBED_THRESHOLD_DEFAULT: float = float(_getenv("EMBED_THRESHOLD_DEFAULT", "0.83"))
+
 # Toolkit version (default to analysis_toolkit.TOOLKIT_VERSION when not set)
 TOOLKIT_VERSION: int = int(_getenv("TOOLKIT_VERSION", str(getattr(analysis_toolkit, "TOOLKIT_VERSION", 1))))
 

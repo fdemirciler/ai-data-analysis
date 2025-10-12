@@ -734,8 +734,6 @@ def sum_column(df: pd.DataFrame, column: str) -> pd.DataFrame:
     total = float(np.nansum(s.to_numpy(dtype=float)))
     return pd.DataFrame({"metric": [f"Total {column}"], "value": [total]})
 
-
-# ============================================================================
 # TOOLS SPECIFICATION FOR GEMINI FUNCTION CALLING
 # ============================================================================
 
@@ -753,6 +751,14 @@ TOOLS_SPEC = [
             },
             "required": ["dimension", "metric", "func"],
         },
+        "examples": [
+            "total revenue by region",
+            "sum of sales per product",
+            "average cost per category",
+            "count orders by customer",
+            "max profit per department",
+            "revenue totals grouped by region"
+        ],
     },
     {
         "name": "run_variance",
@@ -766,6 +772,12 @@ TOOLS_SPEC = [
             },
             "required": ["dimension", "period_a", "period_b"],
         },
+        "examples": [
+            "compare 2023 vs 2024 sales",
+            "year over year change in revenue",
+            "difference between Q1 and Q2",
+            "period over period growth by region"
+        ],
     },
     {
         "name": "run_describe",
@@ -777,6 +789,13 @@ TOOLS_SPEC = [
                 "group_by": {"type": "string", "description": "Optional column to group by before describing"},
             },
         },
+        "examples": [
+            "describe dataset",
+            "summary of numeric columns",
+            "dataset overview",
+            "overall stats",
+            "basic statistics"
+        ],
     },
     
     # Core data manipulation
@@ -828,7 +847,14 @@ TOOLS_SPEC = [
                 "include_pct": {"type": "boolean", "default": True, "description": "Include percentage column"}
             },
             "required": ["column"]
-        }
+        },
+        "examples": [
+            "top categories",
+            "frequency of region",
+            "count of customers",
+            "most common segment",
+            "value distribution of status"
+        ]
     },
     {
         "name": "missing_values",
@@ -836,39 +862,6 @@ TOOLS_SPEC = [
         "parameters": {
             "type": "object",
             "properties": {}
-        }
-    },
-    
-    # Grouping & aggregation
-    {
-        "name": "top_n_per_group",
-        "description": "Top or bottom N rows within each group based on a metric",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "group_by_column": {"type": "string", "description": "Column to group by"},
-                "metric_column": {"type": "string", "description": "Numeric column to rank by"},
-                "n": {"type": "integer", "minimum": 1, "default": 5, "description": "Number of rows per group"},
-                "ascending": {"type": "boolean", "default": False, "description": "False for top N, True for bottom N"}
-            },
-            "required": ["group_by_column", "metric_column"]
-        }
-    },
-    {
-        "name": "group_statistics",
-        "description": "Compute multiple statistics per group (mean, sum, count, min, max, std, etc.)",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "group_by_column": {"type": "string", "description": "Column to group by"},
-                "value_column": {"type": "string", "description": "Numeric column to analyze"},
-                "stats": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["mean", "sum", "count", "min", "max", "std", "median", "var"]},
-                    "default": ["mean", "sum", "count", "min", "max", "std"]
-                }
-            },
-            "required": ["group_by_column", "value_column"]
         }
     },
     
@@ -885,7 +878,13 @@ TOOLS_SPEC = [
                 "aggfunc": {"type": "string", "enum": ["sum", "mean", "median", "count", "min", "max"], "default": "sum"}
             },
             "required": ["index", "columns", "values"]
-        }
+        },
+        "examples": [
+            "revenue by region and quarter",
+            "sum sales by product and month",
+            "count orders per segment and channel",
+            "average price by category and brand"
+        ]
     },
     
     # Statistical measures
@@ -1001,6 +1000,13 @@ TOOLS_SPEC = [
                 "column": {"type": "string", "description": "Numeric column to sum"}
             },
             "required": ["column"]
-        }
+        },
+        "examples": [
+            "sum of revenue",
+            "total input",
+            "add up all sales",
+            "grand total of cost",
+            "what is the total amount"
+        ]
     },
 ]

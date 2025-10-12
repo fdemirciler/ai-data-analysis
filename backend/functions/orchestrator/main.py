@@ -29,6 +29,7 @@ import sandbox_runner
 import analysis_toolkit
 import aliases
 import config
+import embedding_router
 from google.api_core import exceptions as gax_exceptions  # type: ignore
 import logging
 from functools import lru_cache
@@ -256,30 +257,82 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         })
 
         classification = None
-        try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(
-                    gemini_client.classify_intent,
-                    question,
-                    schema_snippet,
-                    sample_rows,
-                    analysis_toolkit.TOOLS_SPEC,
-                    hinting,
+        if config.EMBED_ROUTER_ENABLED:
+            intent_guess, embed_score = None, 0.0
+            try:
+                intent_guess, embed_score = embedding_router.semantic_route(
+                    question, model=config.EMBED_MODEL, timeout_s=config.EMBED_TIMEOUT_SECONDS
                 )
-                remaining = CLASSIFIER_TIMEOUT_SECONDS
-                while True:
-                    try:
-                        classification = fut.result(timeout=min(remaining, 2))
-                        break
-                    except FuturesTimeout:
-                        yield _sse_format({"type": "still_working"})
-                        remaining -= 2
-                        if remaining <= 0:
-                            raise
-        except FuturesTimeout:
-            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
-        except Exception:
-            classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+            except Exception:
+                intent_guess, embed_score = None, 0.0
+
+            if intent_guess is not None:
+                try:
+                    threshold = embedding_router.get_embed_threshold(intent_guess)
+                except Exception:
+                    threshold = float(config.EMBED_THRESHOLD_DEFAULT)
+
+                passes_guards = True
+                if intent_guess == "run_describe" and (not _is_describe_like(question)):
+                    passes_guards = False
+                if intent_guess == "run_aggregation" and _is_multi_metric_request(question, column_names, columns_schema):
+                    passes_guards = False
+
+                if embed_score >= threshold and passes_guards:
+                    restricted_spec = [t for t in (analysis_toolkit.TOOLS_SPEC or []) if t.get("name") == intent_guess]
+                    if restricted_spec:
+                        try:
+                            with ThreadPoolExecutor(max_workers=1) as ex:
+                                fut = ex.submit(
+                                    gemini_client.classify_intent,
+                                    question,
+                                    schema_snippet,
+                                    sample_rows,
+                                    restricted_spec,
+                                    hinting,
+                                )
+                                try:
+                                    classification = fut.result(timeout=3)
+                                except FuturesTimeout:
+                                    classification = None
+                        except Exception:
+                            classification = None
+                try:
+                    logging.info(json.dumps({
+                        "event": "embed_router",
+                        "intent_guess": intent_guess,
+                        "score": embed_score,
+                        "threshold": threshold if intent_guess is not None else None,
+                        "accepted": bool(classification),
+                    }))
+                except Exception:
+                    pass
+
+        if classification is None:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(
+                        gemini_client.classify_intent,
+                        question,
+                        schema_snippet,
+                        sample_rows,
+                        analysis_toolkit.TOOLS_SPEC,
+                        hinting,
+                    )
+                    remaining = CLASSIFIER_TIMEOUT_SECONDS
+                    while True:
+                        try:
+                            classification = fut.result(timeout=min(remaining, 2))
+                            break
+                        except FuturesTimeout:
+                            yield _sse_format({"type": "still_working"})
+                            remaining -= 2
+                            if remaining <= 0:
+                                raise
+            except FuturesTimeout:
+                classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
+            except Exception:
+                classification = {"intent": "UNKNOWN", "params": {}, "confidence": 0.0}
 
         # Canonicalize tool name and params to router intents
         raw_intent = (classification or {}).get("intent") or "UNKNOWN"

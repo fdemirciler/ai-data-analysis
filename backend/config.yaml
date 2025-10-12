@@ -1,0 +1,47 @@
+default:
+  GCP_PROJECT: "ai-data-analyser"
+  FILES_BUCKET: "ai-data-analyser-files"
+  ALLOWED_ORIGINS: "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com"
+  PRESENTATIONAL_CODE_STYLE: "educational"
+  MIN_FASTPATH_CONFIDENCE: 0.65
+  CLASSIFIER_TIMEOUT_SECONDS: 10
+  MAX_FASTPATH_ROWS: 50000
+  FORCE_FALLBACK_MIN_ROWS: 500000
+  MAX_CHART_POINTS: 500
+  ORCH_IPC_MODE: "base64"
+  TOOLKIT_VERSION: 2
+  SSE_PING_INTERVAL_SECONDS: 22
+  CHAT_HARD_TIMEOUT_SECONDS: 60
+  CHAT_REPAIR_TIMEOUT_SECONDS: 30
+  CODEGEN_TIMEOUT_SECONDS: 30
+
+orchestrator:
+  FASTPATH_ENABLED: 1
+  FALLBACK_ENABLED: 1
+  CODE_RECONSTRUCT_ENABLED: 1
+  GEMINI_MODEL_NAME: "gemini-2.5-flash"
+  GEMINI_MAX_TOKENS: 4096
+  GEMINI_TEMPERATURE: 0.2
+  GEMINI_FUSED: 0
+  CLASSIFIER_MODEL_OVERRIDE: ""
+  PRESENTATIONAL_CODE_TEMPERATURE: 0.1
+  RUNTIME_SERVICE_ACCOUNT: ""
+  GCP_REGION: "europe-west4"
+  MEMORY: "512Mi"
+  CPU: "1"
+  fastpath_disable_column_prune:
+    AGGREGATE: 0
+    VARIANCE: 0
+    FILTER_SORT: 0
+    FILTER: 0
+    SORT: 0
+    VALUE_COUNTS: 0
+    TOP_N_PER_GROUP: 0
+    PIVOT: 0
+    PERCENTILE: 0
+    OUTLIERS: 0
+    SUM_COLUMN: 0
+
+prod:
+  # Only specify values that differ from orchestrator/default
+  CLASSIFIER_TIMEOUT_SECONDS: 12

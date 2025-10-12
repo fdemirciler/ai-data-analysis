@@ -28,41 +28,34 @@ import gemini_client
 import sandbox_runner
 import analysis_toolkit
 import aliases
+import config
 from google.api_core import exceptions as gax_exceptions  # type: ignore
 import logging
 from functools import lru_cache
 import re
 
-# Configuration
-PROJECT_ID = os.getenv("GCP_PROJECT", "ai-data-analyser")
-FILES_BUCKET = os.getenv("FILES_BUCKET", "ai-data-analyser-files")
-PING_INTERVAL_SECONDS = int(os.getenv("SSE_PING_INTERVAL_SECONDS", "22"))
-HARD_TIMEOUT_SECONDS = int(os.getenv("CHAT_HARD_TIMEOUT_SECONDS", "60"))
-REPAIR_TIMEOUT_SECONDS = int(os.getenv("CHAT_REPAIR_TIMEOUT_SECONDS", "30"))
-ORCH_IPC_MODE = os.getenv("ORCH_IPC_MODE", "base64").lower()
-RUNTIME_SERVICE_ACCOUNT = os.getenv("RUNTIME_SERVICE_ACCOUNT")
+# Configuration (centralized)
+PROJECT_ID = config.PROJECT_ID
+FILES_BUCKET = config.FILES_BUCKET
+PING_INTERVAL_SECONDS = config.SSE_PING_INTERVAL_SECONDS
+HARD_TIMEOUT_SECONDS = config.CHAT_HARD_TIMEOUT_SECONDS
+REPAIR_TIMEOUT_SECONDS = config.CHAT_REPAIR_TIMEOUT_SECONDS
+ORCH_IPC_MODE = config.ORCH_IPC_MODE
+RUNTIME_SERVICE_ACCOUNT = config.RUNTIME_SERVICE_ACCOUNT
 
-# Smart dispatcher flags
-FASTPATH_ENABLED = os.getenv("FASTPATH_ENABLED", "1").lower() not in ("0", "false", "no")
-FALLBACK_ENABLED = os.getenv("FALLBACK_ENABLED", "1").lower() not in ("0", "false", "no")
-CODE_RECONSTRUCT_ENABLED = os.getenv("CODE_RECONSTRUCT_ENABLED", "1").lower() not in ("0", "false", "no")
-MIN_FASTPATH_CONFIDENCE = float(os.getenv("MIN_FASTPATH_CONFIDENCE", "0.65"))
-CLASSIFIER_TIMEOUT_SECONDS = int(os.getenv("CLASSIFIER_TIMEOUT_SECONDS", "8"))
-MAX_FASTPATH_ROWS = int(os.getenv("MAX_FASTPATH_ROWS", "50000"))
-FORCE_FALLBACK_MIN_ROWS = int(os.getenv("FORCE_FALLBACK_MIN_ROWS", "500000"))
-MAX_CHART_POINTS = int(os.getenv("MAX_CHART_POINTS", "500"))
-TOOLKIT_VERSION = int(os.getenv("TOOLKIT_VERSION", str(getattr(analysis_toolkit, "TOOLKIT_VERSION", 1))))
-MIRROR_COMMAND_TO_FIRESTORE = os.getenv("MIRROR_COMMAND_TO_FIRESTORE", "0").lower() in ("1", "true", "yes")
-CODEGEN_TIMEOUT_SECONDS = int(os.getenv("CODEGEN_TIMEOUT_SECONDS", "30"))
+FASTPATH_ENABLED = config.FASTPATH_ENABLED
+FALLBACK_ENABLED = config.FALLBACK_ENABLED
+CODE_RECONSTRUCT_ENABLED = config.CODE_RECONSTRUCT_ENABLED
+MIN_FASTPATH_CONFIDENCE = config.MIN_FASTPATH_CONFIDENCE
+CLASSIFIER_TIMEOUT_SECONDS = config.CLASSIFIER_TIMEOUT_SECONDS
+MAX_FASTPATH_ROWS = config.MAX_FASTPATH_ROWS
+FORCE_FALLBACK_MIN_ROWS = config.FORCE_FALLBACK_MIN_ROWS
+MAX_CHART_POINTS = config.MAX_CHART_POINTS
+TOOLKIT_VERSION = config.TOOLKIT_VERSION
+MIRROR_COMMAND_TO_FIRESTORE = config.MIRROR_COMMAND_TO_FIRESTORE
+CODEGEN_TIMEOUT_SECONDS = config.CODEGEN_TIMEOUT_SECONDS
 
-ALLOWED_ORIGINS = {
-    o.strip()
-    for o in (os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com",
-    ) or "").split(",")
-    if o.strip()
-}
+ALLOWED_ORIGINS = config.ALLOWED_ORIGINS
 
 # Firebase Admin SDK Initialization
 try:
@@ -73,6 +66,12 @@ except ValueError:
 
 def _origin_allowed(origin: str | None) -> bool:
     return origin in ALLOWED_ORIGINS if origin else False
+
+# Validate configuration at startup (logs warnings for suspicious values)
+try:
+    config.validate_config(logger=logging)
+except Exception:
+    pass
 
 
 _CACHED_SIGNING_CREDS = None
@@ -235,7 +234,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                     yield _sse_format({"type": "error", "data": {"code": "NO_CONTEXT", "message": "Could not find the context for the previous analysis."}})
                     return
 
-                style = os.getenv("PRESENTATIONAL_CODE_STYLE", "educational")
+                style = config.PRESENTATIONAL_CODE_STYLE
                 ctx_json = json.dumps(context, ensure_ascii=False, sort_keys=True)
                 code_text = _cached_presentational_code(message_id_prev, ctx_json, schema_snippet, style)
                 yield _sse_format({
@@ -307,13 +306,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         }
         intent = name_map.get(str(raw_intent), str(raw_intent).upper())
 
-        # Convert snake_case params to existing camelCase where needed
+        # Params are expected in snake_case as defined in TOOLS_SPEC
         params = dict(raw_params)
-        if intent == "VARIANCE":
-            if "period_a" in params and "periodA" not in params:
-                params["periodA"] = params.get("period_a")
-            if "period_b" in params and "periodB" not in params:
-                params["periodB"] = params.get("period_b")
 
         # Parameter validation and resolution
         def _validate_and_resolve(i: str, p: dict) -> tuple[bool, dict]:
@@ -325,9 +319,9 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                     return bool(resolved.get("dimension") and resolved.get("metric") and p.get("func")), resolved
                 if i == "VARIANCE":
                     resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
-                    resolved["periodA"] = aliases.resolve_column(p.get("periodA"), column_names) or p.get("periodA")
-                    resolved["periodB"] = aliases.resolve_column(p.get("periodB"), column_names) or p.get("periodB")
-                    return bool(resolved.get("dimension") and resolved.get("periodA") and resolved.get("periodB")), resolved
+                    resolved["period_a"] = aliases.resolve_column(p.get("period_a"), column_names) or p.get("period_a")
+                    resolved["period_b"] = aliases.resolve_column(p.get("period_b"), column_names) or p.get("period_b")
+                    return bool(resolved.get("dimension") and resolved.get("period_a") and resolved.get("period_b")), resolved
                 if i == "FILTER_SORT":
                     resolved["sort_col"] = aliases.resolve_column(p.get("sort_col"), column_names) or p.get("sort_col")
                     if p.get("filter_col"):
@@ -422,7 +416,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
             )
 
         # Optional SSE for debugging (no data rows logged)
-        if os.getenv("LOG_CLASSIFIER_RESPONSE") == "1":
+        if config.LOG_CLASSIFIER_RESPONSE:
             try:
                 yield _sse_format({
                     "type": "classification_result",
@@ -465,8 +459,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                 try:
                     # Determine needed columns using a central helper
                     def _col_prune_disabled(intent_name: str) -> bool:
-                        flag = os.getenv(f"FASTPATH_DISABLE_COLUMN_PRUNE_{intent_name}", "0").lower()
-                        return flag in ("1", "true", "yes")
+                        return config.fastpath_disable_column_prune(intent_name)
 
                     def compute_needed_cols(intent_name: str, rp: dict) -> list[str] | None:
                         if _col_prune_disabled(intent_name):
@@ -474,7 +467,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         if intent_name == "AGGREGATE":
                             return [c for c in [rp.get("dimension"), rp.get("metric")] if c]
                         if intent_name == "VARIANCE":
-                            return [c for c in [rp.get("dimension"), rp.get("periodA"), rp.get("periodB")] if c]
+                            return [c for c in [rp.get("dimension"), rp.get("period_a"), rp.get("period_b")] if c]
                         if intent_name == "FILTER_SORT":
                             return [c for c in [rp.get("sort_col"), rp.get("filter_col")] if c]
                         if intent_name == "FILTER":
@@ -515,8 +508,8 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                         res_df = analysis_toolkit.run_aggregation(df, dim, met, resolved_params.get("func", params.get("func", "sum")))
                     elif intent == "VARIANCE":
                         dim = resolved_params.get("dimension")
-                        a = resolved_params.get("periodA")
-                        b = resolved_params.get("periodB")
+                        a = resolved_params.get("period_a")
+                        b = resolved_params.get("period_b")
                         res_df = analysis_toolkit.run_variance(df, dim, a, b)
                     elif intent == "FILTER_SORT":
                         sort_col = resolved_params.get("sort_col")

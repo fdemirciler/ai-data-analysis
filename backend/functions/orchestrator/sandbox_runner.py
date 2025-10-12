@@ -18,13 +18,14 @@ Environment variable:
 from __future__ import annotations
 import ast
 import os
+import config
 from typing import Iterable, Tuple, Dict, List
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-_SANDBOX_MODE = os.getenv("SANDBOX_MODE", "restricted").lower()
+_SANDBOX_MODE = config.SANDBOX_MODE
 
 # Minimal baseline imports for restricted environments
 ALLOWED_IMPORTS_BASE = {"pandas", "numpy", "math", "json"}

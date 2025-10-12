@@ -54,9 +54,11 @@ except Exception:
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
+import config
+
 ALLOWED_IMPORTS = set(SANDBOX_ALLOWED_IMPORTS)
-CODE_TIMEOUT = int(os.getenv("CODE_TIMEOUT", "60"))
-MAX_MEMORY_BYTES = int(os.getenv("CODE_MAX_MEMORY_BYTES", str(512 * 1024 * 1024)))  # 512MB
+CODE_TIMEOUT = int(config.CODE_TIMEOUT)
+MAX_MEMORY_BYTES = int(config.CODE_MAX_MEMORY_BYTES)  # 512MB default
 try:
     import resource
 except Exception:

@@ -1,0 +1,9 @@
+{
+  "GCP_PROJECT": "ai-data-analyser",
+  "GCP_REGION": "europe-west4",
+  "RUNTIME_SERVICE_ACCOUNT": "",
+  "MEMORY": "512Mi",
+  "CPU": "1",
+  "FILES_BUCKET": "ai-data-analyser-files",
+  "ALLOWED_ORIGINS": "http://localhost:5173,https://ai-data-analyser.web.app,https://ai-data-analyser.firebaseapp.com"
+}

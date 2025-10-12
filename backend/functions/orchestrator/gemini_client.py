@@ -7,16 +7,17 @@ from typing import Any, Dict, List
 
 import pandas as pd
 import google.generativeai as genai
+import config
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-_MODEL_NAME = "gemini-2.5-flash"  # As requested
-_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_MODEL_NAME = config.GEMINI_MODEL_NAME
+_API_KEY = config.GEMINI_API_KEY
 
-_MAX_TOKENS = 4096
-_TEMPERATURE = 0.2
+_MAX_TOKENS = config.GEMINI_MAX_TOKENS
+_TEMPERATURE = config.GEMINI_TEMPERATURE
 
 _configured = False
 _model = None
@@ -73,10 +74,7 @@ def generate_analysis_code(
 
     resp = model.generate_content(
         prompt,
-        generation_config={
-            "max_output_tokens": _MAX_TOKENS,
-            "temperature": _TEMPERATURE,
-        },
+        generation_config=config.GEMINI_GENERATION_CONFIG,
     )
 
     text = _safe_response_text(resp)
@@ -115,10 +113,7 @@ def generate_summary(
     try:
         resp = model.generate_content(
             prompt,
-            generation_config={
-                "max_output_tokens": _MAX_TOKENS,
-                "temperature": _TEMPERATURE,
-            },
+            generation_config=config.PRESENTATIONAL_GENERATION_CONFIG,
         )
         text = _safe_response_text(resp).strip()
         if text:
@@ -147,7 +142,7 @@ def generate_code_and_summary(
     """
     Return (code, summary) using a single Gemini call, with a one-time repair loop.
     """
-    fused = os.getenv("GEMINI_FUSED", "0").lower() not in ("0", "false", "no")
+    fused = config.GEMINI_FUSED
     if not fused:
         code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
         return code, "Analysis planned. Executed results will follow."
@@ -171,10 +166,7 @@ def generate_code_and_summary(
 
     resp = model.generate_content(
         prompt,
-        generation_config={
-            "max_output_tokens": _MAX_TOKENS,
-            "temperature": _TEMPERATURE,
-        },
+        generation_config=config.GEMINI_GENERATION_CONFIG,
     )
 
     text = _safe_response_text(resp)
@@ -190,10 +182,7 @@ def generate_code_and_summary(
         )
         retry_resp = model.generate_content(
             feedback_prompt,
-            generation_config={
-                "max_output_tokens": _MAX_TOKENS,
-                "temperature": 0.0, # Use 0 temp for deterministic repair
-            },
+            generation_config=config.GEMINI_GENERATION_CONFIG,
         )
         text = _safe_response_text(retry_resp)
         code = _extract_code_block(text)
@@ -243,10 +232,7 @@ def repair_code(
 
     resp = model.generate_content(
         prompt,
-        generation_config={
-            "max_output_tokens": _MAX_TOKENS,
-            "temperature": 0.0,
-        },
+        generation_config=config.GEMINI_GENERATION_CONFIG,
     )
     text = _safe_response_text(resp)
     code = _extract_code_block(text)
@@ -371,10 +357,7 @@ def generate_presentational_code(
     try:
         resp = model.generate_content(
             prompt,
-            generation_config={
-                "max_output_tokens": 4096,
-                "temperature": 0.1,
-            },
+            generation_config=config.PRESENTATIONAL_GENERATION_CONFIG,
         )
         text = _safe_response_text(resp)
         code = _extract_any_python_block(text)
@@ -517,20 +500,14 @@ def classify_intent(
             try:
                 resp = mdl.generate_content(
                     prompt,
-                    generation_config={
-                        "max_output_tokens": 2048,
-                        "temperature": 0.0,
-                    },
+                    generation_config=config.GEMINI_GENERATION_CONFIG,
                     tool_config={"function_calling_config": {"mode": "ANY"}},
                 )
             except Exception:
                 # Fallback to older style
                 resp = mdl.generate_content(
                     prompt,
-                    generation_config={
-                        "max_output_tokens": 2048,
-                        "temperature": 0.0,
-                    },
+                    generation_config=config.GEMINI_GENERATION_CONFIG,
                     tool_config={"function_calling_config": "ANY"},
                 )
             if getattr(resp, "candidates", None):
@@ -554,7 +531,7 @@ def classify_intent(
 
     tried = set()
     candidates = [_MODEL_NAME]
-    override = os.getenv("CLASSIFIER_MODEL_OVERRIDE", "").strip()
+    override = config.CLASSIFIER_MODEL_OVERRIDE
     if override:
         candidates.append(override)
     # Known-good for tool calls
@@ -624,7 +601,7 @@ def is_show_code_request(question: str) -> dict:
         "Answer with only a JSON object."
     )
     try:
-        resp = model.generate_content(prompt, generation_config={"max_output_tokens": 256, "temperature": 0.0})
+        resp = model.generate_content(prompt, generation_config=config.GEMINI_GENERATION_CONFIG)
         text = _safe_response_text(resp)
         js = _extract_json_block(text)
         if not js:
@@ -660,8 +637,8 @@ def reconstruct_code_from_tool_call(tool_name: str, params: dict, schema_snippet
         ]
     elif tool == "VARIANCE":
         dim = params.get("dimension", "<dimension>")
-        a = params.get("periodA", "<periodA>")
-        b = params.get("periodB", "<periodB>")
+        a = params.get("period_a", "<period_a>")
+        b = params.get("period_b", "<period_b>")
         code_lines += [
             f"    a = pd.to_numeric(df['{a}'], errors='coerce')",
             f"    b = pd.to_numeric(df['{b}'], errors='coerce')",
@@ -745,10 +722,7 @@ def reconstruct_presentational_code(
     try:
         resp = model.generate_content(
             prompt,
-            generation_config={
-                "max_output_tokens": _MAX_TOKENS,
-                "temperature": 0.1,
-            },
+            generation_config=config.PRESENTATIONAL_GENERATION_CONFIG,
         )
         text = _safe_response_text(resp)
         code = _extract_code_block(text)

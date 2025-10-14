@@ -449,6 +449,10 @@ def classify_intent(
             "description": t.get("description", ""),
             "parameters": _to_gemini_schema(params_js),
         }
+        # Append examples if present
+        examples = t.get("examples")
+        if examples and isinstance(examples, list):
+            fn["description"] += f"\n\nExample queries: {', '.join(examples[:5])}"
         function_declarations.append(fn)
     tools_payload = [{"function_declarations": function_declarations}] if function_declarations else None
 
@@ -479,14 +483,15 @@ def classify_intent(
     hint_block = (hinting or "").strip()
 
     prompt = (
-        "You are a meticulous data analysis router. Your job is to determine if a user's question can be answered by a SINGLE tool call from the provided list.\n"
-        "If the question is ambiguous, requires multiple steps, or combines tasks such that a single tool call cannot fully answer it, you MUST NOT call any function.\n\n"
-        "STRICT RULES:\n"
-        "- Only call a tool if one call can fully and accurately answer the entire question.\n"
-        "- AGGREGATE supports exactly one metric. If the user asks for multiple metrics in one grouped table, DO NOT call any function.\n"
-        "- If the request would require TWO OR MORE tools (e.g., filter + pivot), DO NOT call any function.\n"
-        "- If the only uncertainty is column name capitalization or minor aliasing, choose the closest dataset column (case-insensitive) and proceed.\n"
-        "- If unsure for any other reason, do not call any function.\n\n"
+        "You are a data analysis router. Determine if ONE tool call can answer the user's question.\n\n"
+        "WHEN TO CALL A TOOL:\n"
+        "- Question clearly matches a tool's purpose → Call it\n"
+        "- Minor column name variations (case, spacing) → Call anyway, use closest match\n"
+        "- Simple aggregations, filters, summaries → Call the appropriate tool\n\n"
+        "WHEN NOT TO CALL:\n"
+        "- AGGREGATE tool but user wants multiple metrics in one grouped table → Don't call\n"
+        "- Request needs multiple sequential operations (filter THEN sort THEN pivot) → Don't call\n"
+        "- Essential columns genuinely missing from schema → Don't call\n\n"
         f"SCHEMA (truncated):\n{schema_snippet}\n\n"
         f"SAMPLE ROWS (truncated):\n{sample_preview}\n\n"
         f"HINTS:\n{hint_block}\n\n"
@@ -500,14 +505,20 @@ def classify_intent(
             try:
                 resp = mdl.generate_content(
                     prompt,
-                    generation_config=config.GEMINI_GENERATION_CONFIG,
+                    generation_config={
+                        "max_output_tokens": config.GEMINI_MAX_TOKENS,
+                        "temperature": config.CLASSIFIER_TEMPERATURE,
+                    },
                     tool_config={"function_calling_config": {"mode": "ANY"}},
                 )
             except Exception:
                 # Fallback to older style
                 resp = mdl.generate_content(
                     prompt,
-                    generation_config=config.GEMINI_GENERATION_CONFIG,
+                    generation_config={
+                        "max_output_tokens": config.GEMINI_MAX_TOKENS,
+                        "temperature": config.CLASSIFIER_TEMPERATURE,
+                    },
                     tool_config={"function_calling_config": "ANY"},
                 )
             if getattr(resp, "candidates", None):

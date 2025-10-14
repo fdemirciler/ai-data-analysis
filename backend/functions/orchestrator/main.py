@@ -362,30 +362,49 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         # Params are expected in snake_case as defined in TOOLS_SPEC
         params = dict(raw_params)
 
+        # Case-insensitive column resolution helper
+        def _smart_resolve_column(name: str, cols: list[str]) -> str | None:
+            """Resolve column with case-insensitive fallback before fuzzy matching."""
+            if not name:
+                return None
+            
+            # 1. Exact match
+            if name in cols:
+                return name
+            
+            # 2. Case-insensitive match
+            name_lower = name.lower()
+            for c in cols:
+                if c.lower() == name_lower:
+                    return c
+            
+            # 3. Alias + fuzzy (existing logic)
+            return aliases.resolve_column(name, cols)
+
         # Parameter validation and resolution
         def _validate_and_resolve(i: str, p: dict) -> tuple[bool, dict]:
             resolved = dict(p)
             try:
                 if i == "AGGREGATE":
-                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
-                    resolved["metric"] = aliases.resolve_column(p.get("metric"), column_names) or p.get("metric")
+                    resolved["dimension"] = _smart_resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["metric"] = _smart_resolve_column(p.get("metric"), column_names) or p.get("metric")
                     return bool(resolved.get("dimension") and resolved.get("metric") and p.get("func")), resolved
                 if i == "VARIANCE":
-                    resolved["dimension"] = aliases.resolve_column(p.get("dimension"), column_names) or p.get("dimension")
-                    resolved["period_a"] = aliases.resolve_column(p.get("period_a"), column_names) or p.get("period_a")
-                    resolved["period_b"] = aliases.resolve_column(p.get("period_b"), column_names) or p.get("period_b")
+                    resolved["dimension"] = _smart_resolve_column(p.get("dimension"), column_names) or p.get("dimension")
+                    resolved["period_a"] = _smart_resolve_column(p.get("period_a"), column_names) or p.get("period_a")
+                    resolved["period_b"] = _smart_resolve_column(p.get("period_b"), column_names) or p.get("period_b")
                     return bool(resolved.get("dimension") and resolved.get("period_a") and resolved.get("period_b")), resolved
                 if i == "FILTER_SORT":
-                    resolved["sort_col"] = aliases.resolve_column(p.get("sort_col"), column_names) or p.get("sort_col")
+                    resolved["sort_col"] = _smart_resolve_column(p.get("sort_col"), column_names) or p.get("sort_col")
                     if p.get("filter_col"):
-                        resolved["filter_col"] = aliases.resolve_column(p.get("filter_col"), column_names) or p.get("filter_col")
+                        resolved["filter_col"] = _smart_resolve_column(p.get("filter_col"), column_names) or p.get("filter_col")
                     return bool(resolved.get("sort_col")), resolved
                 if i == "DESCRIBE":
                     return True, resolved
                 if i == "FILTER":
                     flist = []
                     for f in (p.get("filters") or []):
-                        col = aliases.resolve_column(f.get("column"), column_names) or f.get("column")
+                        col = _smart_resolve_column(f.get("column"), column_names) or f.get("column")
                         flist.append({
                             "column": col,
                             "operator": f.get("operator"),
@@ -394,29 +413,29 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                     resolved["filters"] = flist
                     return bool(flist), resolved
                 if i == "SORT":
-                    resolved["sort_by_column"] = aliases.resolve_column(p.get("sort_by_column"), column_names) or p.get("sort_by_column")
+                    resolved["sort_by_column"] = _smart_resolve_column(p.get("sort_by_column"), column_names) or p.get("sort_by_column")
                     return bool(resolved.get("sort_by_column")), resolved
                 if i == "VALUE_COUNTS":
-                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    resolved["column"] = _smart_resolve_column(p.get("column"), column_names) or p.get("column")
                     return bool(resolved.get("column")), resolved
                 if i == "TOP_N_PER_GROUP":
-                    resolved["group_by_column"] = aliases.resolve_column(p.get("group_by_column"), column_names) or p.get("group_by_column")
-                    resolved["metric_column"] = aliases.resolve_column(p.get("metric_column"), column_names) or p.get("metric_column")
+                    resolved["group_by_column"] = _smart_resolve_column(p.get("group_by_column"), column_names) or p.get("group_by_column")
+                    resolved["metric_column"] = _smart_resolve_column(p.get("metric_column"), column_names) or p.get("metric_column")
                     return bool(resolved.get("group_by_column") and resolved.get("metric_column")), resolved
                 if i == "PIVOT":
-                    resolved["index"] = aliases.resolve_column(p.get("index"), column_names) or p.get("index")
-                    resolved["columns"] = aliases.resolve_column(p.get("columns"), column_names) or p.get("columns")
-                    resolved["values"] = aliases.resolve_column(p.get("values"), column_names) or p.get("values")
+                    resolved["index"] = _smart_resolve_column(p.get("index"), column_names) or p.get("index")
+                    resolved["columns"] = _smart_resolve_column(p.get("columns"), column_names) or p.get("columns")
+                    resolved["values"] = _smart_resolve_column(p.get("values"), column_names) or p.get("values")
                     return bool(resolved.get("index") and resolved.get("columns") and resolved.get("values")), resolved
                 if i == "PERCENTILE":
-                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    resolved["column"] = _smart_resolve_column(p.get("column"), column_names) or p.get("column")
                     # p may be string or number; defer casting to toolkit
                     return bool(resolved.get("column") and ("p" in p)), resolved
                 if i == "OUTLIERS":
-                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    resolved["column"] = _smart_resolve_column(p.get("column"), column_names) or p.get("column")
                     return bool(resolved.get("column")), resolved
                 if i == "SUM_COLUMN":
-                    resolved["column"] = aliases.resolve_column(p.get("column"), column_names) or p.get("column")
+                    resolved["column"] = _smart_resolve_column(p.get("column"), column_names) or p.get("column")
                     return bool(resolved.get("column")), resolved
             except Exception:
                 return False, resolved

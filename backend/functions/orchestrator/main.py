@@ -641,7 +641,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
                             pass
                         summary_obj = {"summary": "The analysis is complete. Please review the data below."}
                     summary_text = summary_obj.get("summary") or ""
-                    table_rows = res_df.head(50).to_dict(orient="records")
+                    table_rows = res_df.head(200).to_dict(orient="records")
                     metrics = {"rows": int(getattr(res_df, "shape", [0, 0])[0] or 0),
                                "columns": int(getattr(res_df, "shape", [0, 0])[1] or 0)}
                     chart_data = {}
@@ -957,7 +957,7 @@ def _events(session_id: str, dataset_id: str, uid: str, question: str) -> Iterab
         "data": {
             "messageId": message_id,
             "summary": summary,
-            "tableSample": table[:50],  # Now works correctly
+            "tableSample": table[:200],  # Send up to 200 rows to frontend
             "chartData": chart_data,
             "metrics": metrics,
             "strategy": "fallback",

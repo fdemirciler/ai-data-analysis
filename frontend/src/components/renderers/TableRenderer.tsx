@@ -1,5 +1,6 @@
 import React from "react";
 import { ChevronsUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { cn } from "../ui/utils";
 
 type ColMeta = {
   name: string;
@@ -27,9 +28,13 @@ const formatNumber = (val: number, asPercent: boolean): string => {
 };
 
 export function TableRenderer({ rows }: { rows: any[] }) {
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const rowsPerPage = 25;
+
   const colMetas: ColMeta[] = React.useMemo(() => {
     if (!rows || rows.length === 0) return [];
-    const sample = rows.slice(0, 50);
+    // Use all rows for column detection (no artificial limit)
+    const sample = rows;
     const seenOrder: Record<string, number> = {};
     const metas: Record<string, ColMeta> = {} as any;
     let idxCounter = 0;
@@ -87,12 +92,14 @@ export function TableRenderer({ rows }: { rows: any[] }) {
     } else {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     }
+    setCurrentPage(1); // Reset to first page when sorting
   };
 
   const sortedRows = React.useMemo(() => {
-    const sample = rows ? rows.slice(0, 50) : [];
-    if (!sortBy) return sample;
-    const copy = sample.slice();
+    // Use all rows provided (no artificial limit)
+    if (!rows || rows.length === 0) return [];
+    if (!sortBy) return rows;
+    const copy = rows.slice();
     copy.sort((a: any, b: any) => {
       const av = a?.[sortBy];
       const bv = b?.[sortBy];
@@ -112,6 +119,19 @@ export function TableRenderer({ rows }: { rows: any[] }) {
     });
     return copy;
   }, [rows, sortBy, sortDir]);
+
+  // Pagination logic
+  const totalPages = Math.ceil(sortedRows.length / rowsPerPage);
+  const startIdx = (currentPage - 1) * rowsPerPage;
+  const endIdx = startIdx + rowsPerPage;
+  const paginatedRows = sortedRows.slice(startIdx, endIdx);
+
+  // Reset to page 1 if current page exceeds total pages
+  React.useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [currentPage, totalPages]);
 
   if (!rows || rows.length === 0) {
     return (
@@ -137,49 +157,101 @@ export function TableRenderer({ rows }: { rows: any[] }) {
   };
 
   return (
-    <div className="relative inline-block max-w-full max-h-[420px] overflow-auto border rounded-xl">
-      <table className="min-w-max text-sm">
-        <thead className="bg-muted/40 sticky top-0 z-10">
-          <tr>
-            {cols.map((c) => {
-              const isActive = sortBy === c;
-              const icon = !isActive ? (
-                <ChevronsUpDown className="h-3.5 w-3.5 opacity-60" />
-              ) : sortDir === "asc" ? (
-                <ChevronUp className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronDown className="h-3.5 w-3.5" />
-              );
-              return (
-                <th key={c} className="text-left px-3 py-2 font-medium whitespace-nowrap bg-muted/40">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 hover:underline decoration-dotted cursor-pointer select-none"
-                    aria-sort={isActive ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-                    onClick={() => onToggleSort(c)}
+    <div className="w-full overflow-hidden">
+      <div className="overflow-x-auto overflow-y-auto max-h-[420px]">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 z-10 bg-background">
+            <tr>
+              {cols.map((c, idx) => {
+                const isActive = sortBy === c;
+                const icon = !isActive ? (
+                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-60" />
+                ) : sortDir === "asc" ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                );
+                return (
+                  <th 
+                    key={c} 
+                    className={cn(
+                      "text-left py-3 font-semibold whitespace-nowrap border-b border-border",
+                      idx === 0 ? "pl-8 pr-6" : idx === cols.length - 1 ? "pr-8 pl-6" : "px-6",
+                      !metaByCol[c]?.isText && "text-right"
+                    )}
                   >
-                    <span>{c}</span>
-                    {icon}
-                  </button>
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {sortedRows.map((r, i) => (
-            <tr key={i} className="odd:bg-background hover:bg-muted/30">
-              {cols.map((c) => (
-                <td key={c} className="px-3 py-2 whitespace-nowrap max-w-[320px] overflow-hidden text-ellipsis">
-                  {renderCell(c, (r as any)?.[c])}
-                </td>
-              ))}
+                    <button
+                      type="button"
+                      className={cn(
+                        "inline-flex items-center gap-1.5 cursor-pointer select-none transition-opacity",
+                        "hover:opacity-80 hover:underline underline-offset-2"
+                      )}
+                      aria-sort={isActive ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                      onClick={() => onToggleSort(c)}
+                    >
+                      <span>{c}</span>
+                      {icon}
+                    </button>
+                  </th>
+                );
+              })}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length > 50 && (
-        <div className="text-xs text-muted-foreground p-2">Showing first 50 rows of {rows.length}.</div>
+          </thead>
+          <tbody>
+            {paginatedRows.map((r, i) => (
+              <tr key={i} className="border-b border-border/10 last:border-b-0 hover:bg-accent/30 transition-colors duration-150">
+                {cols.map((c, idx) => (
+                  <td 
+                    key={c} 
+                    className={cn(
+                      "py-3 whitespace-nowrap max-w-[320px] overflow-hidden text-ellipsis",
+                      idx === 0 ? "pl-8 pr-6 font-medium" : idx === cols.length - 1 ? "pr-8 pl-6" : "px-6",
+                      !metaByCol[c]?.isText && idx !== 0 && "text-right"
+                    )}
+                  >
+                    {renderCell(c, (r as any)?.[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sortedRows.length > rowsPerPage && (
+        <div className="flex items-center justify-between px-8 py-3 border-t border-border/10 text-xs text-muted-foreground">
+          <div>
+            Showing {startIdx + 1}-{Math.min(endIdx, sortedRows.length)} of {sortedRows.length} rows
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className={cn(
+                "px-3 py-1 rounded-md transition-colors",
+                currentPage === 1
+                  ? "text-muted-foreground/50 cursor-not-allowed"
+                  : "text-foreground hover:bg-accent cursor-pointer"
+              )}
+            >
+              Previous
+            </button>
+            <span className="text-xs">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className={cn(
+                "px-3 py-1 rounded-md transition-colors",
+                currentPage === totalPages
+                  ? "text-muted-foreground/50 cursor-not-allowed"
+                  : "text-foreground hover:bg-accent cursor-pointer"
+              )}
+            >
+              Next
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

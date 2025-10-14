@@ -98,9 +98,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
         </div>
 
         {/* Message Content */}
-        <div className="flex-1 space-y-2 pt-1">
+        <div className="flex-1 space-y-4 pt-1">
           {message.kind === "text" && (
-            <div className="whitespace-pre-wrap break-words">{message.content}</div>
+            <div className="whitespace-pre-wrap break-words text-justify">{message.content}</div>
           )}
           {message.kind === "status" && (
             <div className="whitespace-pre-wrap break-words text-muted-foreground italic">
@@ -120,11 +120,15 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
             </div>
           )}
           {message.kind === "table" && (
-            <div className="w-fit max-w-full overflow-auto">
+            <div className="w-full max-w-full">
               <TableRenderer rows={message.rows} />
             </div>
           )}
-          {message.kind === "chart" && <ChartRenderer chartData={message.chartData} />}
+          {message.kind === "chart" && (
+            <div className="w-full max-w-full">
+              <ChartRenderer chartData={message.chartData} />
+            </div>
+          )}
           {message.kind === "code" && (
             <div className="border rounded-xl p-4 bg-background">
               <details>

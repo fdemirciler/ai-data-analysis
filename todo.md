@@ -148,10 +148,3 @@ with ThreadPoolExecutor(max_workers=1) as ex:
 ✅ It uses the same control pattern as your classifier.
 ✅ It falls back gracefully when the summary call fails.
 
-**** Opportunity: Consolidate Configuration Variables.
-
-Observation: Timeouts and other configuration values are defined as global constants at the top of main.py. This is good, but for a production-grade system, centralizing them makes them easier to manage.
-
-Improvement: Create a new file, config.py, in the orchestrator directory. Move all the os.getenv calls and constants (like MIN_FASTPATH_CONFIDENCE, CLASSIFIER_TIMEOUT_SECONDS, etc.) into this file. Then, in main.py, simply do from . import config.
-
-Benefit: This decouples configuration from your application logic, making the code cleaner and making it easier to manage settings across your application, especially as it grows.

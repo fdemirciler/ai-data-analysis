@@ -35,23 +35,6 @@ __pycache__/
 .venv/
 venv/
 
-# Env & tooling
-.env
-.env.*
-.envrc
-.python-version
-# Keep sample env files under version control
-!.env.example
-!.env.sample
-!.env.local.example
-/frontend/.env
-/frontend/.env.local
-/frontend/.env.development
-/frontend/.env.production
-/backend/env.chat.yaml
-/backend/env.sign-upload-url.yaml
-/backend/env.chat.env
-/backend/env.sign-upload-url.env
 
 # Python tooling caches
 .mypy_cache/
@@ -75,7 +58,22 @@ test_files
 
 
 
-final_project_design.md
+# Env & tooling
+.env
+.env.*
+.envrc
+.python-version
+# Keep sample env files under version control
+!.env.example
+!.env.sample
+!.env.local.example
+/frontend/.env
+/frontend/.env.local
+/frontend/.env.development
+/frontend/.env.production
+/backend/env.chat.yaml
+/backend/env.sign-upload-url.yaml
+/backend/env.chat.env
+/backend/env.sign-upload-url.env
 
-backend/env.chat.env
-backend/env.sign-upload-url.env
+!backend/.env.orchestrator.example

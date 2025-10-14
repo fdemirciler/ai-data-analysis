@@ -135,9 +135,19 @@ This section contains more technical details for developers working on the proje
 -   **Serverless**: The entire backend runs on serverless platforms (Cloud Functions and Cloud Run), which means it scales automatically and you only pay for what you use.
 -   **Impersonated Credentials**: The application uses IAM service account impersonation to generate signed URLs, which avoids the need to manage and store long-lived private keys.
 
+### UI/UX Features
+
+-   **ChatGPT-Style Interface**: Clean, minimal design with seamless table and chart integration.
+-   **Smart Pagination**: Tables display 25 rows per page with elegant Previous/Next navigation, supporting up to 200 rows total.
+-   **Adaptive Formatting**: Numbers are formatted intelligently (no decimals for values ≥1000, 2 decimals for smaller values).
+-   **Right-Aligned Numbers**: Numeric columns are automatically right-aligned for better readability.
+-   **Theme Support**: Full light/dark mode support with theme-consistent colors throughout.
+-   **Interactive Tables**: Sortable columns with visual indicators, hover effects, and sticky headers.
+
 ### Known Limitations
 
 -   If the AI model returns an empty `metrics` object, it is persisted as is. The system only auto-fills metrics if the field is missing entirely.
 -   Charts are optional. If the analysis doesn't produce a chart, the corresponding data file may be empty.
+-   Table display is limited to 200 rows maximum (configurable in backend).
 
 

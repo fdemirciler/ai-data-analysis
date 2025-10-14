@@ -1,6 +1,6 @@
-﻿# AI Data Analyst â€“ Progress Report
+# AI Data Analyst — Progress Report
 
-Date: 2025-10-03 01:47 (+02:00)
+Date: 2025-10-14 16:56 (+02:00)
 
 ## Current Status
 - **Preprocessing is fully functional**. Upload via signed URL triggers preprocessing; artifacts are generated and Firestore status advances to `ready`.
@@ -106,6 +106,42 @@ flowchart TD
 - **Bucket lifecycle** (optional): add object TTL for `users/` prefix to match Firestore TTL.
 
 ## Recent Changes (Changelog)
+- **2025-10-14 (ChatGPT-style UI redesign + pagination)**
+  - Frontend
+    - ChartRenderer (frontend/src/components/renderers/ChartRenderer.tsx):
+      - Implemented adaptive number formatting (no decimals for values ≥1000, 2 decimals for smaller values).
+      - Added backdrop blur and transparency to tooltips (bg-background/95 with backdrop-blur-sm).
+      - Replaced hardcoded chart colors with theme palette (--chart-1 through --chart-5) for consistent theming.
+      - Added Y-axis tick formatting using the adaptive number formatter.
+      - Reduced padding (p-8 → p-6) and added subtle background (bg-gray-50/30 dark:bg-gray-800/20).
+      - Increased line stroke width to 2px for better visibility.
+    - TableRenderer (frontend/src/components/renderers/TableRenderer.tsx):
+      - Complete redesign to blend seamlessly with chat container (removed all decorative elements).
+      - Removed container border, shadow, rounded corners, and background for minimal ChatGPT-style look.
+      - Changed table width from inline-block to full-width (w-full) to fill chat container.
+      - Simplified header styling with clean background (bg-background) and stronger border (border-border).
+      - Implemented right-alignment for numeric columns (except first column which stays left-aligned).
+      - Reduced row padding (py-5 → py-3) for more compact, readable display.
+      - Lightened row borders (border-border/10) for very subtle dividers.
+      - Added pagination: 25 rows per page with Previous/Next navigation buttons.
+      - Implemented elegant pagination UI with row counter ("Showing 1-25 of X rows") and page indicator ("Page 1 of Y").
+      - Auto-reset to page 1 when sorting columns for better UX.
+      - Removed artificial frontend row limits to display all data provided by backend.
+  - Backend
+    - Orchestrator (backend/functions/orchestrator/main.py):
+      - Increased row limit from 50 to 200 in fastpath execution (line 644: res_df.head(50) → res_df.head(200)).
+      - Increased row limit from 50 to 200 in fallback execution (line 960: table[:50] → table[:200]).
+      - Ensured consistency across all execution paths (normal, fastpath, fallback) for row limits.
+  - Result
+    - ChatGPT-style minimal UI for tables and charts with seamless integration into chat flow.
+    - All 200 rows now accessible via pagination (previously limited to 50 rows with data loss).
+    - Better number formatting and alignment throughout the application.
+    - Theme-consistent colors across light/dark modes.
+    - No data loss - users can now view all rows provided by backend through pagination.
+    - Improved readability with right-aligned numbers and compact spacing.
+  - Timestamp
+    - 2025-10-14 16:56 (+02:00)
+
 - **2025-10-06 (Footer meta formatting + dynamic table width)**
   - Frontend
     - ChatMessage (frontend/src/components/ChatMessage.tsx): Footer chip now shows "N rows X M columns"; table wrapper uses w-fit so narrow tables avoid horizontal scroll.

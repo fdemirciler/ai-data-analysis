@@ -22,6 +22,7 @@ interface ChatSidebarProps {
   dailyLimit: number;
   dailyUsed: number;
   onDeleteConversation: (id: string) => void;
+  onSignOut?: () => void;
 }
 
 export function ChatSidebar({
@@ -36,6 +37,7 @@ export function ChatSidebar({
   dailyLimit,
   dailyUsed,
   onDeleteConversation,
+  onSignOut,
 }: ChatSidebarProps) {
   return (
     <>
@@ -133,6 +135,14 @@ export function ChatSidebar({
                   {dailyUsed} / {dailyLimit} messages
                 </div>
               </div>
+
+              {onSignOut && (
+                <div className="mt-3 px-3">
+                  <Button variant="outline" className="w-full" onClick={onSignOut}>
+                    Sign out
+                  </Button>
+                </div>
+              )}
             </div>
           </>
         ) : (

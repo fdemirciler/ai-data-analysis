@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { Paperclip, ArrowUp } from "lucide-react";
+import { cn } from "./ui/utils";
+import { Plus, Send } from "lucide-react";
 
 interface ChatInputProps {
   onSendMessage: (message: string) => void;
@@ -11,14 +12,33 @@ interface ChatInputProps {
 
 export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputProps) {
   const [message, setMessage] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSubmit = () => {
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
     if (message.trim() && !disabled) {
       onSendMessage(message.trim());
       setMessage("");
+      setIsExpanded(false);
+
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
     }
+  };
+
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setMessage(e.target.value);
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+
+    setIsExpanded(e.target.value.length > 100 || e.target.value.includes("\n"));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -28,33 +48,10 @@ export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputPr
     }
   };
 
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = "auto";
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    }
-  }, [message]);
-
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 z-30">
       <div className="max-w-3xl mx-auto px-4">
-        <div className="group relative flex items-end gap-2 rounded-3xl px-4 py-3 border border-border bg-input-background/90 dark:bg-sidebar-accent/60 dark:border-sidebar-border shadow-lg text-foreground dark:text-sidebar-accent-foreground transition-all duration-300
-        focus-within:-translate-y-1 focus-within:shadow-2xl focus-within:ring-[6px] focus-within:ring-white/50 dark:focus-within:ring-white/25
-        focus-within:border-foreground/40 dark:focus-within:border-white/35 has-[textarea:not(:placeholder-shown)]:-translate-y-1 has-[textarea:not(:placeholder-shown)]:ring-[8px] has-[textarea:not(:placeholder-shown)]:ring-white/60 dark:has-[textarea:not(:placeholder-shown)]:ring-white/40">
-          {/* File Upload Button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 rounded-full flex-shrink-0 text-foreground dark:text-sidebar-accent-foreground"
-            disabled={disabled}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip className="h-4 w-4 text-foreground dark:text-white" />
-          </Button>
-
-          {/* Hidden file input */}
+        <form onSubmit={handleSubmit}>
           <input
             ref={fileInputRef}
             type="file"
@@ -67,7 +64,6 @@ export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputPr
                 try {
                   await onUploadFile(f);
                 } finally {
-                  // Reset input so selecting same file again still fires change
                   if (fileInputRef.current) {
                     fileInputRef.current.value = "";
                   } else {
@@ -78,31 +74,80 @@ export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputPr
             }}
           />
 
-          {/* Textarea */}
-          <Textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask anything"
-            disabled={disabled}
-            className="flex-1 min-h-[24px] max-h-[200px] resize-none border-0 bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 p-0 placeholder:text-muted-foreground group-focus-within:text-foreground"
-            rows={1}
-          />
-
-          {/* Send Button */}
-          {message.trim() && (
-            <Button
-              onClick={handleSubmit}
-              disabled={disabled}
-              size="icon"
-              className="h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 flex-shrink-0"
+          <div
+            className={cn(
+              "w-full bg-background dark:bg-muted/50 cursor-text overflow-clip bg-clip-padding p-2.5 shadow-lg border border-border transition-all duration-200",
+              {
+                "rounded-3xl grid grid-cols-1 grid-rows-[auto_1fr_auto]": isExpanded,
+                "rounded-[28px] grid grid-cols-[auto_1fr_auto] grid-rows-[auto_1fr_auto]": !isExpanded,
+              }
+            )}
+            style={{
+              gridTemplateAreas: isExpanded
+                ? "'header' 'primary' 'footer'"
+                : "'header header header' 'leading primary trailing' '. footer .'",
+            }}
+          >
+            <div
+              className={cn("flex", { hidden: isExpanded })}
+              style={{ gridArea: "leading" }}
             >
-              <ArrowUp className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-        
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-full hover:bg-accent outline-none ring-0"
+                disabled={disabled}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Plus className="size-6 text-muted-foreground shrink-0" />
+              </Button>
+            </div>
+
+            <div
+              className={cn(
+                "flex min-h-14 items-center overflow-x-hidden px-1.5",
+                {
+                  "px-2 py-1 mb-0": isExpanded,
+                  "-my-2.5": !isExpanded,
+                }
+              )}
+              style={{ gridArea: "primary" }}
+            >
+              <div className="flex-1 overflow-auto max-h-52">
+                <Textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={handleTextareaChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask anything"
+                  disabled={disabled}
+                  className="min-h-0 resize-none rounded-none border-0 p-0 text-base placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 scrollbar-thin dark:bg-transparent bg-transparent"
+                  rows={1}
+                />
+              </div>
+            </div>
+
+            <div
+              className="flex items-center gap-2"
+              style={{ gridArea: isExpanded ? "footer" : "trailing" }}
+            >
+              <div className="ms-auto flex items-center gap-1.5">
+                {message.trim() && (
+                  <Button
+                    type="submit"
+                    disabled={disabled}
+                    size="icon"
+                    className="h-9 w-9 rounded-full"
+                  >
+                    <Send className="h-5 w-5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </form>
+
         <p className="text-xs text-muted-foreground text-center mt-2">
           Upload CSV/Excel files, 20 MB file limit. Press Enter to send, Shift+Enter for new line.
         </p>

@@ -51,6 +51,8 @@ export default function ChatPage() {
   const uploadMsgIdByConvRef = useRef<Record<string, string | null>>({});
   const codeInsertedByConvRef = useRef<Record<string, boolean>>({});
   const codeMsgIdByConvRef = useRef<Record<string, string | null>>({});
+  const summaryStreamTimerRef = useRef<number | null>(null);
+  const summaryStreamingRef = useRef<boolean>(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   const dailyLimit = profile?.quota ?? 50;
@@ -116,6 +118,16 @@ export default function ChatPage() {
     }
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (summaryStreamTimerRef.current !== null) {
+        window.clearInterval(summaryStreamTimerRef.current);
+        summaryStreamTimerRef.current = null;
+      }
+      summaryStreamingRef.current = false;
+    };
+  }, []);
+
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
   };
@@ -141,6 +153,11 @@ export default function ChatPage() {
     try {
       abortRef.current?.abort();
     } catch {}
+    if (summaryStreamTimerRef.current !== null) {
+      window.clearInterval(summaryStreamTimerRef.current);
+      summaryStreamTimerRef.current = null;
+    }
+    summaryStreamingRef.current = false;
     const pid = placeholderIdRef.current;
     const cid = activeConversationId;
     if (pid && cid) {
@@ -354,6 +371,11 @@ export default function ChatPage() {
 
     const isCodeOnly = /\b(show|view|display|give|print)\b[^\n]*\bcode\b/i.test(content) || /\bcode only\b/i.test(content);
 
+    if (summaryStreamTimerRef.current !== null) {
+      window.clearInterval(summaryStreamTimerRef.current);
+      summaryStreamTimerRef.current = null;
+    }
+    summaryStreamingRef.current = false;
     setIsTyping(true);
     codeInsertedByConvRef.current[convId] = false;
     codeMsgIdByConvRef.current[convId] = null;
@@ -375,7 +397,8 @@ export default function ChatPage() {
       placeholderIdRef.current = null;
     }
 
-    const updatePlaceholder = (updater: (m: Extract<Message, { role: "assistant" }>) => Message) => {
+    const updatePlaceholder = (updater: (m: Extract<Message, { role: "assistant" }>) => Message): boolean => {
+      let updated = false;
       setConversations((prev) =>
         prev.map((c) => {
           if (c.id !== convId) return c;
@@ -383,9 +406,11 @@ export default function ChatPage() {
           if (idx === -1) return c;
           const nextMsgs = c.messages.slice();
           nextMsgs[idx] = updater(nextMsgs[idx] as Extract<Message, { role: "assistant" }>);
+          updated = true;
           return { ...c, messages: nextMsgs };
         })
       );
+      return updated;
     };
 
     try {
@@ -505,10 +530,52 @@ export default function ChatPage() {
           else if (ev.type === "persisting") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Saving results..." }));
           else if (ev.type === "error") {
             updatePlaceholder((m) => ({ ...m, kind: "error", content: `Error: ${ev.data.message}` }));
+            if (summaryStreamTimerRef.current !== null) {
+              window.clearInterval(summaryStreamTimerRef.current);
+              summaryStreamTimerRef.current = null;
+            }
+            summaryStreamingRef.current = false;
             setIsTyping(false);
           } else if (ev.type === "done") {
-            const text = ev.data.summary || "Analysis complete.";
-            updatePlaceholder((m) => ({ ...m, kind: "text", content: text }));
+            const summaryText =
+              typeof ev.data.summary === "string" && ev.data.summary.trim().length > 0
+                ? ev.data.summary
+                : "Analysis complete.";
+            if (summaryStreamTimerRef.current !== null) {
+              window.clearInterval(summaryStreamTimerRef.current);
+              summaryStreamTimerRef.current = null;
+            }
+            const placeholderReady = updatePlaceholder((m) => ({ ...m, kind: "text", content: "" }));
+            if (placeholderReady) {
+              summaryStreamingRef.current = true;
+              const chars = Array.from(summaryText);
+              const chunkSize = Math.max(1, Math.ceil(chars.length / 80));
+              let index = 0;
+              const streamStep = () => {
+                index = Math.min(index + chunkSize, chars.length);
+                const nextText = chars.slice(0, index).join("");
+                updatePlaceholder((m) => ({ ...m, kind: "text", content: nextText }));
+                bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+                if (index >= chars.length) {
+                  if (summaryStreamTimerRef.current !== null) {
+                    window.clearInterval(summaryStreamTimerRef.current);
+                    summaryStreamTimerRef.current = null;
+                  }
+                  summaryStreamingRef.current = false;
+                  setIsTyping(false);
+                }
+              };
+              streamStep();
+              if (index < chars.length) {
+                summaryStreamTimerRef.current = window.setInterval(streamStep, 24);
+              } else {
+                summaryStreamingRef.current = false;
+              }
+            } else {
+              summaryStreamingRef.current = false;
+              updatePlaceholder((m) => ({ ...m, kind: "text", content: summaryText }));
+              setIsTyping(false);
+            }
             const rows = Array.isArray(ev.data.tableSample) ? ev.data.tableSample : [];
             const chartData = ev.data.chartData || null;
             if (rows && rows.length > 0) {
@@ -554,19 +621,25 @@ export default function ChatPage() {
             }
             if (user?.uid) {
               // Persist assistant summary message and increment usage
-              saveAssistantMessage(user.uid, convId, `${convId}-${Date.now()}-asst`, text).catch(() => {});
+              saveAssistantMessage(user.uid, convId, `${convId}-${Date.now()}-asst`, summaryText).catch(() => {});
               incrementDailyUsage(user.uid).catch(() => {});
             }
-            setIsTyping(false);
           }
         },
       });
     } catch (e: any) {
+      if (summaryStreamTimerRef.current !== null) {
+        window.clearInterval(summaryStreamTimerRef.current);
+        summaryStreamTimerRef.current = null;
+      }
+      summaryStreamingRef.current = false;
       updatePlaceholder((m) => ({ ...m, kind: "error", content: `Connection error: ${e?.message || "stream interrupted"}` }));
       setIsTyping(false);
     } finally {
       abortRef.current = null;
-      setIsTyping(false);
+      if (!summaryStreamingRef.current) {
+        setIsTyping(false);
+      }
     }
   };
 

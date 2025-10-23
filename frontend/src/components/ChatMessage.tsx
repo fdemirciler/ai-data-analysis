@@ -1,75 +1,77 @@
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { cn } from "./ui/utils";
-import { Bot } from "lucide-react";
+import { Bot, Copy as CopyIcon } from "lucide-react";
 import { TableRenderer } from "./renderers/TableRenderer";
 import { ChartRenderer } from "./renderers/ChartRenderer";
 import { Button } from "./ui/button";
-import { CopyBlock, dracula } from "react-code-blocks";
 
 export type Message =
   | {
-      id: string;
-      role: "user" | "assistant";
-      timestamp: Date;
-      kind: "text";
-      content: string;
-      meta?: {
-        fileName?: string;
-        fileSize?: string; // formatted, e.g., "1.2 MB"
-        rows?: number;
-        columns?: number;
-      };
-    }
-  | {
-      id: string;
-      role: "user" | "assistant";
-      timestamp: Date;
-      kind: "status";
-      content: string;
-    }
-  | {
-      id: string;
-      role: "assistant";
-      timestamp: Date;
-      kind: "error";
-      content: string;
-    }
-  | {
-      id: string;
-      role: "assistant";
-      timestamp: Date;
-      kind: "table";
-      rows: any[];
-    }
-  | {
-      id: string;
-      role: "assistant";
-      timestamp: Date;
-      kind: "chart";
-      chartData: {
-        kind: string;
-        labels: string[];
-        series: { label: string; data: number[] }[];
-      };
-    }
-  | {
-      id: string;
-      role: "assistant";
-      timestamp: Date;
-      kind: "code";
-      code: string;
-      language?: "python";
-      warnings?: string[];
+    id: string;
+    role: "user" | "assistant";
+    timestamp: Date;
+    kind: "text";
+    content: string;
+    meta?: {
+      fileName?: string;
+      fileSize?: string; // formatted, e.g., "1.2 MB"
+      rows?: number;
+      columns?: number;
     };
+  }
+  | {
+    id: string;
+    role: "user" | "assistant";
+    timestamp: Date;
+    kind: "status";
+    content: string;
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "error";
+    content: string;
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "table";
+    rows: any[];
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "chart";
+    chartData: {
+      kind: string;
+      labels: string[];
+      series: { label: string; data: number[] }[];
+    };
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "code";
+    code: string;
+    language?: "python";
+    warnings?: string[];
+  };
 
 interface ChatMessageProps {
   message: Message;
   userName: string;
   showCancel?: boolean;
   onCancel?: () => void;
+  showCursor?: boolean;
 }
 
-export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, showCancel, onCancel }) => {
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, showCancel, onCancel, showCursor }) => {
   const isUser = message.role === "user";
   const timeStr = React.useMemo(() => {
     const d = message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp as any);
@@ -81,9 +83,21 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
   }, [message.timestamp]);
   // no-op state for now
 
+  const normalizedText = React.useMemo(() => {
+    if (message.kind !== "text") return "";
+    try {
+      const raw = (message as any).content || "";
+      const unix = String(raw).replace(/\r\n/g, "\n");
+      // Convert single newlines between non-empty lines into double newlines so Markdown renders paragraphs
+      return unix.replace(/(^|[^\n])\n(?!\n)/g, "$1\n\n");
+    } catch {
+      return (message as any).content || "";
+    }
+  }, [message]);
+
   return (
     <div className="w-full py-8 px-4">
-      <div className={cn("max-w-3xl mx-auto flex gap-6")}> 
+      <div className={cn("max-w-3xl mx-auto flex gap-6")}>
         {/* Avatar */}
         <div className="flex-shrink-0">
           {isUser ? (
@@ -100,7 +114,21 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
         {/* Message Content */}
         <div className="flex-1 space-y-4 pt-1">
           {message.kind === "text" && (
-            <div className="whitespace-pre-wrap break-words text-justify">{message.content}</div>
+            <div className="prose dark:prose-invert max-w-none leading-relaxed break-words text-left">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node, ...props }) => (
+                    <a {...props} target="_blank" rel="noopener noreferrer" />
+                  ),
+                }}
+              >
+                {normalizedText}
+              </ReactMarkdown>
+              {showCursor && (
+                <span className="inline-block w-2 h-4 bg-muted-foreground animate-blink ml-1 rounded-sm" />
+              )}
+            </div>
           )}
           {message.kind === "status" && (
             <div className="whitespace-pre-wrap break-words text-muted-foreground italic">
@@ -134,13 +162,23 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
               <details>
                 <summary className="cursor-pointer select-none font-medium">View generated Python script</summary>
                 <div className="mt-3 space-y-3">
-                  <div className="text-sm">
-                    <CopyBlock
-                      text={message.code}
-                      language={message.language || "python"}
-                      wrapLongLines
-                      theme={dracula}
-                    />
+                  <div className="relative group">
+                    <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-sm">
+                      <code className="whitespace-pre-wrap">{message.code}</code>
+                    </pre>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(message.code);
+                        } catch { }
+                      }}
+                    >
+                      <CopyIcon className="h-4 w-4" />
+                    </Button>
                   </div>
                   {Array.isArray(message.warnings) && message.warnings.length > 0 && (
                     <div className="mt-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 dark:text-amber-200 dark:bg-amber-950 dark:border-amber-900">

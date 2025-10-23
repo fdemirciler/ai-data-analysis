@@ -107,7 +107,8 @@ def generate_summary(
         f"USER QUESTION: \"{question}\"\n\n"
         f"TABLE PREVIEW:\n{preview}\n\n"
         f"KEY METRICS:\n{metrics}\n\n"
-        "Now write a one-paragraph interpretation of the data:"
+        "Organize your interpretation into multiple short paragraphs for readability. "
+        "Start a new paragraph whenever the focus or comparison changes (e.g., contrasts, trends, anomalies, conclusions)."
     )
 
     try:
@@ -764,4 +765,3 @@ def _extract_code_block(text: str) -> str:
         return m.group(1).strip()
 
     return ""
-

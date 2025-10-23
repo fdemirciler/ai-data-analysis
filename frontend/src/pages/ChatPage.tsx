@@ -541,58 +541,11 @@ export default function ChatPage() {
               typeof ev.data.summary === "string" && ev.data.summary.trim().length > 0
                 ? ev.data.summary
                 : "Analysis complete.";
-            if (summaryStreamTimerRef.current !== null) {
-              window.clearInterval(summaryStreamTimerRef.current);
-              summaryStreamTimerRef.current = null;
-            }
-            const placeholderReady = updatePlaceholder((m) => ({ ...m, kind: "text", content: "" }));
-            if (placeholderReady) {
-              summaryStreamingRef.current = true;
-              const chars = Array.from(summaryText);
-              const chunkSize = Math.max(1, Math.ceil(chars.length / 80));
-              let index = 0;
-              const streamStep = () => {
-                index = Math.min(index + chunkSize, chars.length);
-                const nextText = chars.slice(0, index).join("");
-                updatePlaceholder((m) => ({ ...m, kind: "text", content: nextText }));
-                bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-                if (index >= chars.length) {
-                  if (summaryStreamTimerRef.current !== null) {
-                    window.clearInterval(summaryStreamTimerRef.current);
-                    summaryStreamTimerRef.current = null;
-                  }
-                  summaryStreamingRef.current = false;
-                  setIsTyping(false);
-                }
-              };
-              streamStep();
-              if (index < chars.length) {
-                summaryStreamTimerRef.current = window.setInterval(streamStep, 24);
-              } else {
-                summaryStreamingRef.current = false;
-              }
-            } else {
-              summaryStreamingRef.current = false;
-              updatePlaceholder((m) => ({ ...m, kind: "text", content: summaryText }));
-              setIsTyping(false);
-            }
+
+            // Stash table and chart for staged reveal
             const rows = Array.isArray(ev.data.tableSample) ? ev.data.tableSample : [];
             const chartData = ev.data.chartData || null;
-            if (rows && rows.length > 0) {
-              setConversations((prev) =>
-                prev.map((c) =>
-                  c.id === convId
-                    ? {
-                        ...c,
-                        messages: [
-                          ...c.messages,
-                          { id: `${convId}-${Date.now()}-table`, role: "assistant", timestamp: new Date(), kind: "table", rows },
-                        ],
-                      }
-                    : c
-                )
-              );
-            }
+
             const hasChartData = (cd: any): boolean => {
               try {
                 const labels = cd?.labels;
@@ -604,21 +557,132 @@ export default function ChatPage() {
                 return false;
               }
             };
-            if (chartData && hasChartData(chartData)) {
-              setConversations((prev) =>
-                prev.map((c) =>
-                  c.id === convId
-                    ? {
-                        ...c,
-                        messages: [
-                          ...c.messages,
-                          { id: `${convId}-${Date.now()}-chart`, role: "assistant", timestamp: new Date(), kind: "chart", chartData },
-                        ],
-                      }
-                    : c
-                )
-              );
+
+            if (summaryStreamTimerRef.current !== null) {
+              window.clearInterval(summaryStreamTimerRef.current);
+              summaryStreamTimerRef.current = null;
             }
+
+            // Convert placeholder to text and stream words
+            const placeholderReady = updatePlaceholder((m) => ({ ...m, kind: "text", content: "" }));
+            if (placeholderReady) {
+              summaryStreamingRef.current = true;
+              const tokens = summaryText.split(/(\s+)/); // keep whitespace tokens
+              let idx = 0;
+              let wordsCounted = 0;
+              let wordsTarget = 2; // alternate 2 and 3 words per tick
+
+              const step = () => {
+                let addedWordTokens = 0;
+                while (idx < tokens.length && addedWordTokens < wordsTarget) {
+                  const t = tokens[idx++];
+                  if (t && /\S/.test(t)) {
+                    addedWordTokens++;
+                  }
+                }
+                // Include trailing whitespace after the last word added
+                while (idx < tokens.length && tokens[idx] && !/\S/.test(tokens[idx])) {
+                  // attach whitespace directly after the word bundle
+                  idx++;
+                }
+
+                const nextText = tokens.slice(0, idx).join("");
+                updatePlaceholder((m) => ({ ...m, kind: "text", content: nextText }));
+                bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+
+                // alternate 2 and 3
+                wordsCounted++;
+                wordsTarget = wordsTarget === 2 ? 3 : 2;
+
+                if (idx >= tokens.length) {
+                  if (summaryStreamTimerRef.current !== null) {
+                    window.clearInterval(summaryStreamTimerRef.current);
+                    summaryStreamTimerRef.current = null;
+                  }
+                  summaryStreamingRef.current = false;
+                  setIsTyping(false);
+
+                  // Reveal table (if any), then chart after a short delay
+                  if (rows && rows.length > 0) {
+                    setConversations((prev) =>
+                      prev.map((c) =>
+                        c.id === convId
+                          ? {
+                              ...c,
+                              messages: [
+                                ...c.messages,
+                                { id: `${convId}-${Date.now()}-table`, role: "assistant", timestamp: new Date(), kind: "table", rows },
+                              ],
+                            }
+                          : c
+                      )
+                    );
+                  }
+                  if (chartData && hasChartData(chartData)) {
+                    window.setTimeout(() => {
+                      setConversations((prev) =>
+                        prev.map((c) =>
+                          c.id === convId
+                            ? {
+                                ...c,
+                                messages: [
+                                  ...c.messages,
+                                  { id: `${convId}-${Date.now()}-chart`, role: "assistant", timestamp: new Date(), kind: "chart", chartData },
+                                ],
+                              }
+                            : c
+                        )
+                      );
+                    }, 275);
+                  }
+                }
+              };
+              step();
+              if (idx < tokens.length) {
+                summaryStreamTimerRef.current = window.setInterval(step, 80);
+              } else {
+                summaryStreamingRef.current = false;
+                setIsTyping(false);
+              }
+            } else {
+              // Fallback: no placeholder present; set full text immediately and then reveal others
+              summaryStreamingRef.current = false;
+              updatePlaceholder((m) => ({ ...m, kind: "text", content: summaryText }));
+              setIsTyping(false);
+              if (rows && rows.length > 0) {
+                setConversations((prev) =>
+                  prev.map((c) =>
+                    c.id === convId
+                      ? {
+                          ...c,
+                          messages: [
+                            ...c.messages,
+                            { id: `${convId}-${Date.now()}-table`, role: "assistant", timestamp: new Date(), kind: "table", rows },
+                          ],
+                        }
+                      : c
+                  )
+                );
+              }
+              if (chartData && hasChartData(chartData)) {
+                window.setTimeout(() => {
+                  setConversations((prev) =>
+                    prev.map((c) =>
+                      c.id === convId
+                        ? {
+                            ...c,
+                            messages: [
+                              ...c.messages,
+                              { id: `${convId}-${Date.now()}-chart`, role: "assistant", timestamp: new Date(), kind: "chart", chartData },
+                            ],
+                          }
+                        : c
+                    )
+                  );
+                }, 275);
+              }
+            }
+
             if (user?.uid) {
               // Persist assistant summary message and increment usage
               saveAssistantMessage(user.uid, convId, `${convId}-${Date.now()}-asst`, summaryText).catch(() => {});
@@ -676,6 +740,15 @@ export default function ChatPage() {
                   <ChatMessage
                     message={message}
                     userName={userName}
+                    showCursor={
+                      Boolean(
+                        summaryStreamingRef.current &&
+                        isTyping &&
+                        message.role === "assistant" &&
+                        message.kind === "text" &&
+                        message.id === placeholderIdRef.current
+                      )
+                    }
                     showCancel={
                       isTyping &&
                       message.role === "assistant" &&

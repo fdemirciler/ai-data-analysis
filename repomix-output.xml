@@ -1,0 +1,5447 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+App.tsx
+components/AuthBox.tsx
+components/ChatHeader.tsx
+components/ChatInput.tsx
+components/ChatMessage.tsx
+components/ChatSidebar.tsx
+components/DarkModeToggle.tsx
+components/HelpContent.tsx
+components/renderers/ChartRenderer.tsx
+components/renderers/TableRenderer.tsx
+components/ui/button.tsx
+components/ui/card.tsx
+components/ui/input.tsx
+components/ui/label.tsx
+components/ui/popover.tsx
+components/ui/scroll-area.tsx
+components/ui/separator.tsx
+components/ui/sidebar.tsx
+components/ui/textarea.tsx
+components/ui/utils.ts
+context/AuthContext.tsx
+index.css
+lib/firebase.ts
+main.tsx
+pages/ChatPage.tsx
+pages/LandingPage.tsx
+services/api.ts
+services/firestore.ts
+styles/globals.css
+styles/tailwind.css
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="App.tsx">
+import React from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { useAuth } from "./context/AuthContext";
+import { Toaster } from "sonner";
+import ChatPage from "./pages/ChatPage";
+import LandingPage from "./pages/LandingPage";
+
+function ProtectedRoute({ children }: { children: React.ReactElement }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  if (!user) return <Navigate to="/" replace />;
+  return children;
+}
+
+export default function App() {
+  return (
+    <>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route
+          path="/chat"
+          element={
+            <ProtectedRoute>
+              <ChatPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <Toaster />
+    </>
+  );
+}
+</file>
+
+<file path="components/AuthBox.tsx">
+import React, { useState } from "react";
+import { Button } from "./ui/button";
+import { Card, CardContent } from "./ui/card";
+import { Separator } from "./ui/separator";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { useAuth } from "../context/AuthContext";
+import { Github, Mail } from "lucide-react";
+import { toast } from "sonner";
+
+type AuthBoxProps = {
+  showContinueAsGuest?: boolean;
+  onContinueAsGuest?: () => void;
+};
+
+export default function AuthBox({ showContinueAsGuest = false, onContinueAsGuest }: AuthBoxProps) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const { signIn, signUp, signInWithGoogle, signInWithGithub, sendPasswordReset } = useAuth();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (isLogin) {
+        await signIn(email, password);
+        toast.success("Successfully signed in!");
+      } else {
+        await signUp(email, password);
+        toast.success("Account created successfully!");
+      }
+    } catch (error: any) {
+      toast.error(error?.message || "An error occurred");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithGoogle();
+      toast.success("Successfully signed in with Google!");
+    } catch (error: any) {
+      toast.error(error?.message || "An error occurred");
+    }
+  };
+
+  const handleGithubSignIn = async () => {
+    try {
+      await signInWithGithub();
+      toast.success("Successfully signed in with GitHub!");
+    } catch (error: any) {
+      toast.error(error?.message || "An error occurred");
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      toast.message("Enter your email above and click 'Forgot password?' again.");
+      return;
+    }
+    try {
+      await sendPasswordReset(email);
+      toast.success("Password reset email sent.");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to send reset email");
+    }
+  };
+
+  return (
+    <Card className="w-full border border-border/60 shadow-xl">
+      <CardContent className="pt-4 pb-6 sm:pt-6 sm:pb-8 px-4 sm:px-8">
+        <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="email" className="text-muted-foreground sm:text-base">
+              Email
+            </Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="h-10 sm:h-11 border-border"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="password" className="text-muted-foreground sm:text-base">
+              Password
+            </Label>
+            <Input
+              id="password"
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className="h-10 sm:h-11 border-border"
+            />
+          </div>
+
+          {isLogin && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="text-xs sm:text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                onClick={handleForgotPassword}
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            className="w-full h-10 sm:h-11 text-sm sm:text-base shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+            size="lg"
+            disabled={loading}
+            style={{ backgroundColor: "#7985c9" }}
+          >
+            {loading ? "Please wait..." : isLogin ? "Sign in" : "Create account"}
+          </Button>
+        </form>
+
+        <div className="flex items-center gap-3 sm:gap-4 mt-4 sm:mt-6">
+          <Separator className="flex-1 bg-border/40" />
+          <div className="px-3 text-xs sm:text-sm text-muted-foreground whitespace-nowrap">
+            Or continue with
+          </div>
+          <Separator className="flex-1 bg-border/40" />
+        </div>
+
+        <div className="mt-4 sm:mt-6 space-y-2 sm:space-y-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full h-10 sm:h-11 font-semibold text-sm sm:text-base text-slate-500 cursor-pointer"
+            size="lg"
+            onClick={handleGoogleSignIn}
+          >
+            <Mail className="mr-2 h-4 w-4" />
+            Google
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full h-10 sm:h-11 font-semibold text-sm sm:text-base text-slate-500 cursor-pointer"
+            size="lg"
+            onClick={handleGithubSignIn}
+          >
+            <Github className="mr-2 h-4 w-4" />
+            GitHub
+          </Button>
+        </div>
+
+        <div className="mt-4 sm:mt-6 space-y-2 text-center text-xs sm:text-sm text-muted-foreground">
+          <div>
+            {isLogin ? "Don't have an account? " : "Already have an account? "}
+            <button
+              type="button"
+              onClick={() => setIsLogin(!isLogin)}
+              className="font-medium hover:underline cursor-pointer"
+            >
+              {isLogin ? "Register now" : "Sign in"}
+            </button>
+          </div>
+
+          {showContinueAsGuest && (
+            <button
+              type="button"
+              onClick={() => onContinueAsGuest?.()}
+              className="font-medium text-indigo-600 hover:text-primary/80 transition-colors cursor-pointer underline-offset-4 hover:underline"
+            >
+              Continue as guest
+            </button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+</file>
+
+<file path="components/ChatHeader.tsx">
+import React from "react";
+import { DarkModeToggle } from "./DarkModeToggle";
+import { RefreshCw, HelpCircle, Github } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { HelpContent } from './HelpContent';
+import { Button, buttonVariants } from './ui/button';
+
+interface ChatHeaderProps {
+  sidebarOpen: boolean;
+}
+
+export function ChatHeader({ sidebarOpen }: ChatHeaderProps) {
+  // Match the sidebar widths: 256px (expanded) or 64px (collapsed)
+  const leftOffset = sidebarOpen ? 256 : 64;
+  return (
+    <header
+      className="fixed top-0 right-0 h-14 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50 flex items-center justify-between px-4 transition-all duration-300"
+      style={{ left: `${leftOffset}px` }}
+    >
+      <div className="font-semibold tracking-tight">AI Data Analyst</div>
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="icon" onClick={() => window.location.reload()}>
+          <RefreshCw className="size-4" />
+        </Button>
+        <DarkModeToggle />
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Help"
+              className={buttonVariants({ variant: "ghost", size: "icon" })}
+            >
+              <HelpCircle className="size-4" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80">
+            <HelpContent />
+          </PopoverContent>
+        </Popover>
+        <Button variant="ghost" size="icon" onClick={() => window.open('https://github.com/fdemirciler/ai-data-analysis', '_blank')}>
+          <Github className="size-4" />
+        </Button>
+      </div>
+    </header>
+  );
+}
+</file>
+
+<file path="components/ChatInput.tsx">
+import React, { useState, useRef } from "react";
+import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
+import { cn } from "./ui/utils";
+import { Plus, Send } from "lucide-react";
+
+interface ChatInputProps {
+  onSendMessage: (message: string) => void;
+  onUploadFile?: (file: File) => void | Promise<void>;
+  disabled?: boolean;
+}
+
+export function ChatInput({ onSendMessage, onUploadFile, disabled }: ChatInputProps) {
+  const [message, setMessage] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    if (message.trim() && !disabled) {
+      onSendMessage(message.trim());
+      setMessage("");
+      setIsExpanded(false);
+
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    }
+  };
+
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setMessage(e.target.value);
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+
+    setIsExpanded(e.target.value.length > 100 || e.target.value.includes("\n"));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  return (
+    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background to-transparent pt-8 pb-4 z-30">
+      <div className="max-w-3xl mx-auto px-4">
+        <form onSubmit={handleSubmit}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={async (e) => {
+              const inputEl = e.currentTarget as HTMLInputElement;
+              const f = inputEl.files?.[0];
+              if (f && onUploadFile && !disabled) {
+                try {
+                  await onUploadFile(f);
+                } finally {
+                  if (fileInputRef.current) {
+                    fileInputRef.current.value = "";
+                  } else {
+                    inputEl.value = "";
+                  }
+                }
+              }
+            }}
+          />
+
+          <div
+            className={cn(
+              "w-full bg-background dark:bg-muted/50 cursor-text overflow-clip bg-clip-padding p-2.5 shadow-lg border border-border transition-all duration-200",
+              {
+                "rounded-3xl grid grid-cols-1 grid-rows-[auto_1fr_auto]": isExpanded,
+                "rounded-[28px] grid grid-cols-[auto_1fr_auto] grid-rows-[auto_1fr_auto]": !isExpanded,
+              }
+            )}
+            style={{
+              gridTemplateAreas: isExpanded
+                ? "'header' 'primary' 'footer'"
+                : "'header header header' 'leading primary trailing' '. footer .'",
+            }}
+          >
+            <div
+              className={cn("flex", { hidden: isExpanded })}
+              style={{ gridArea: "leading" }}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-full hover:bg-accent outline-none ring-0"
+                disabled={disabled}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Plus className="size-6 text-muted-foreground shrink-0" />
+              </Button>
+            </div>
+
+            <div
+              className={cn(
+                "flex min-h-14 items-center overflow-x-hidden px-1.5",
+                {
+                  "px-2 py-1 mb-0": isExpanded,
+                  "-my-2.5": !isExpanded,
+                }
+              )}
+              style={{ gridArea: "primary" }}
+            >
+              <div className="flex-1 overflow-auto max-h-52">
+                <Textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={handleTextareaChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask anything"
+                  disabled={disabled}
+                  className="min-h-0 resize-none rounded-none border-0 p-0 text-base placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0 scrollbar-thin dark:bg-transparent bg-transparent"
+                  rows={1}
+                />
+              </div>
+            </div>
+
+            <div
+              className="flex items-center gap-2"
+              style={{ gridArea: isExpanded ? "footer" : "trailing" }}
+            >
+              <div className="ms-auto flex items-center gap-1.5">
+                {message.trim() && (
+                  <Button
+                    type="submit"
+                    disabled={disabled}
+                    size="icon"
+                    className="h-9 w-9 rounded-full"
+                  >
+                    <Send className="h-5 w-5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </form>
+
+        <p className="text-xs text-muted-foreground text-center mt-2">
+          Upload CSV/Excel files, 20 MB file limit. Press Enter to send, Shift+Enter for new line.
+        </p>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="components/ChatMessage.tsx">
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { cn } from "./ui/utils";
+import { Bot, Copy as CopyIcon } from "lucide-react";
+import { TableRenderer } from "./renderers/TableRenderer";
+import { ChartRenderer } from "./renderers/ChartRenderer";
+import { Button } from "./ui/button";
+
+export type Message =
+  | {
+    id: string;
+    role: "user" | "assistant";
+    timestamp: Date;
+    kind: "text";
+    content: string;
+    meta?: {
+      fileName?: string;
+      fileSize?: string; // formatted, e.g., "1.2 MB"
+      rows?: number;
+      columns?: number;
+    };
+  }
+  | {
+    id: string;
+    role: "user" | "assistant";
+    timestamp: Date;
+    kind: "status";
+    content: string;
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "error";
+    content: string;
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "table";
+    rows: any[];
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "chart";
+    chartData: {
+      kind: string;
+      labels: string[];
+      series: { label: string; data: number[] }[];
+    };
+  }
+  | {
+    id: string;
+    role: "assistant";
+    timestamp: Date;
+    kind: "code";
+    code: string;
+    language?: "python";
+    warnings?: string[];
+  };
+
+interface ChatMessageProps {
+  message: Message;
+  userName: string;
+  showCancel?: boolean;
+  onCancel?: () => void;
+  showCursor?: boolean;
+}
+
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, showCancel, onCancel, showCursor }) => {
+  const isUser = message.role === "user";
+  const timeStr = React.useMemo(() => {
+    const d = message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp as any);
+    try {
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    } catch {
+      return "";
+    }
+  }, [message.timestamp]);
+  // no-op state for now
+
+  const normalizedText = React.useMemo(() => {
+    if (message.kind !== "text") return "";
+    try {
+      const raw = (message as any).content || "";
+      const unix = String(raw).replace(/\r\n/g, "\n");
+      // Convert single newlines between non-empty lines into double newlines so Markdown renders paragraphs
+      return unix.replace(/(^|[^\n])\n(?!\n)/g, "$1\n\n");
+    } catch {
+      return (message as any).content || "";
+    }
+  }, [message]);
+
+  return (
+    <div className="w-full py-8 px-4">
+      <div className={cn("max-w-3xl mx-auto flex gap-6")}>
+        {/* Avatar */}
+        <div className="flex-shrink-0">
+          {isUser ? (
+            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+              {userName.charAt(0).toUpperCase()}
+            </div>
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
+              <Bot className="h-5 w-5" />
+            </div>
+          )}
+        </div>
+
+        {/* Message Content */}
+        <div className="flex-1 space-y-4 pt-1">
+          {message.kind === "text" && (
+            <div className="prose dark:prose-invert max-w-none leading-relaxed break-words text-left">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node, ...props }) => (
+                    <a {...props} target="_blank" rel="noopener noreferrer" />
+                  ),
+                }}
+              >
+                {normalizedText}
+              </ReactMarkdown>
+              {showCursor && (
+                <span className="inline-block w-2 h-4 bg-muted-foreground animate-blink ml-1 rounded-sm" />
+              )}
+            </div>
+          )}
+          {message.kind === "status" && (
+            <div className="whitespace-pre-wrap break-words text-muted-foreground italic">
+              {message.content}
+              {showCancel && (
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={onCancel}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+          {message.kind === "error" && (
+            <div className="whitespace-pre-wrap break-words border border-red-300 bg-red-50 text-red-800 rounded-xl p-4">
+              {message.content}
+            </div>
+          )}
+          {message.kind === "table" && (
+            <div className="w-full max-w-full">
+              <TableRenderer rows={message.rows} />
+            </div>
+          )}
+          {message.kind === "chart" && (
+            <div className="w-full max-w-full">
+              <ChartRenderer chartData={message.chartData} />
+            </div>
+          )}
+          {message.kind === "code" && (
+            <div className="border rounded-xl p-4 bg-background">
+              <details>
+                <summary className="cursor-pointer select-none font-medium">View generated Python script</summary>
+                <div className="mt-3 space-y-3">
+                  <div className="relative group">
+                    <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-sm">
+                      <code className="whitespace-pre-wrap">{message.code}</code>
+                    </pre>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(message.code);
+                        } catch { }
+                      }}
+                    >
+                      <CopyIcon className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {Array.isArray(message.warnings) && message.warnings.length > 0 && (
+                    <div className="mt-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 dark:text-amber-200 dark:bg-amber-950 dark:border-amber-900">
+                      <div className="font-medium mb-1">Validator warnings</div>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {message.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </div>
+          )}
+          <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
+            <span>{timeStr}</span>
+            {message.kind === "text" && message.meta?.fileName && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {message.meta.fileName}
+              </span>
+            )}
+            {message.kind === "text" && message.meta?.fileSize && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {message.meta.fileSize}
+              </span>
+            )}
+            {message.kind === "text" && message.meta?.rows !== undefined && message.meta?.columns !== undefined && (
+              <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                {Number(message.meta.rows).toLocaleString()} rows x {Number(message.meta.columns).toLocaleString()} columns
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+</file>
+
+<file path="components/ChatSidebar.tsx">
+import React from "react";
+import { Button } from "./ui/button";
+import { ScrollArea } from "./ui/scroll-area";
+import { PanelLeftClose, PanelLeft, SquarePen, Trash2, History } from "lucide-react";
+import { cn } from "./ui/utils";
+
+interface Conversation {
+  id: string;
+  title: string;
+  timestamp: Date;
+}
+
+interface ChatSidebarProps {
+  isOpen: boolean;
+  onToggle: () => void;
+  conversations: Conversation[];
+  activeConversationId: string | null;
+  onSelectConversation: (id: string) => void;
+  onNewChat: () => void;
+  userName: string;
+  userPlan: string;
+  dailyLimit: number;
+  dailyUsed: number;
+  onDeleteConversation: (id: string) => void;
+  onSignOut?: () => void;
+}
+
+export function ChatSidebar({
+  isOpen,
+  onToggle,
+  conversations,
+  activeConversationId,
+  onSelectConversation,
+  onNewChat,
+  userName,
+  userPlan,
+  dailyLimit,
+  dailyUsed,
+  onDeleteConversation,
+  onSignOut,
+}: ChatSidebarProps) {
+  return (
+    <>
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 h-full bg-sidebar border-r border-sidebar-border transition-all duration-300 flex flex-col z-40",
+          isOpen ? "w-64" : "w-12 ml-1" // ← 48px wide + 4px margin from left edge
+        )}
+      >
+        {isOpen ? (
+          <>
+            {/* Header - Expanded */}
+            <div className="h-14 p-3 flex items-center justify-between">
+              <Button
+                onClick={onNewChat}
+                variant="ghost"
+                className="flex-1 flex items-center justify-start gap-2"
+              >
+                <SquarePen className="h-4 w-4" />
+                New chat
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onToggle}
+                className="ml-2"
+              >
+                <PanelLeftClose className="h-5 w-5" />
+              </Button>
+            </div>
+
+            {/* Recent Chats Header */}
+            <div className="px-3 py-2">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-sidebar-foreground pl-4">
+                <History className="h-4 w-4" />
+                <span>Recent Chats</span>
+              </h2>
+            </div>
+
+            {/* Chat History */}
+            <ScrollArea className="flex-1 px-2">
+              <div className="space-y-1">
+                {conversations.map((conversation) => (
+                  <div
+                    key={conversation.id}
+                    className={cn(
+                      "group w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors text-left",
+                      activeConversationId === conversation.id
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                    )}
+                  >
+                    <button
+                      onClick={() => onSelectConversation(conversation.id)}
+                      className="truncate flex-1 text-sm text-left pl-4"
+                    >
+                      {conversation.title}
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Delete conversation"
+                      className={cn(
+                        "h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
+                        activeConversationId === conversation.id
+                          ? "text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground"
+                      )}
+                      onClick={() => onDeleteConversation(conversation.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+
+            {/* User Profile */}
+            <div className="border-t border-sidebar-border p-3">
+              <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-sidebar-accent/50 cursor-pointer transition-colors">
+                <div className="w-8 h-8 rounded-full bg-sidebar-primary flex items-center justify-center text-sidebar-primary-foreground">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{userName}</div>
+                  <div className="text-xs text-muted-foreground">{userPlan}</div>
+                </div>
+              </div>
+
+              {/* Daily Limit */}
+              <div className="mt-3 px-3 py-2 rounded-lg bg-sidebar-accent/30">
+                <div className="text-xs text-muted-foreground mb-1">Daily Limit</div>
+                <div className="text-sm">
+                  {dailyUsed} / {dailyLimit} messages
+                </div>
+              </div>
+
+              {onSignOut && (
+                <div className="mt-3 px-3">
+                  <Button variant="outline" className="w-full" onClick={onSignOut}>
+                    Sign out
+                  </Button>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Header - Collapsed */}
+            <div className="flex flex-col items-center gap-2 py-3">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onToggle}
+                className="h-9 w-9"
+              >
+                <PanelLeft className="h-5 w-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onNewChat}
+                title="New chat"
+                className="h-9 w-9"
+              >
+                <SquarePen className="h-5 w-5" />
+              </Button>
+            </div>
+
+            {/* Recent Chats Icon - Collapsed */}
+            <div className="flex flex-col items-center gap-2 py-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Recent Chats"
+                className="h-9 w-9"
+              >
+                <History className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div className="flex-1" />
+
+            {/* User Profile - Collapsed */}
+            <div className="border-t border-sidebar-border py-3 flex flex-col items-center">
+              <Button
+                variant="ghost"
+                size="icon"
+                title={`${userName} (${userPlan})`}
+                className="h-9 w-9"
+              >
+                <div className="w-6 h-6 rounded-full bg-sidebar-primary flex items-center justify-center text-sidebar-primary-foreground text-xs">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
+              </Button>
+            </div>
+          </>
+        )}
+      </aside>
+    </>
+  );
+}
+</file>
+
+<file path="components/DarkModeToggle.tsx">
+import { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
+import { Button } from "./ui/button";
+
+export function DarkModeToggle() {
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    // Check if dark mode is enabled on mount
+    const isDarkMode = document.documentElement.classList.contains("dark");
+    setIsDark(isDarkMode);
+  }, []);
+
+  const toggleDarkMode = () => {
+    const newIsDark = !isDark;
+    setIsDark(newIsDark);
+    
+    if (newIsDark) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggleDarkMode}
+      className="rounded-full"
+    >
+      {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  );
+}
+</file>
+
+<file path="components/HelpContent.tsx">
+import React from 'react';
+
+export const HelpContent: React.FC = () => {
+  return (
+    <div className="p-4 text-sm text-muted-foreground">
+      <h4 className="mb-2 font-semibold text-foreground">How to Use</h4>
+      <p className="mb-3">
+        This is an AI-powered data analyst. Start by uploading a CSV or Excel file using the paperclip icon. Once your file is processed, you can ask questions about your data in plain English.
+      </p>
+      <p className="mb-3">
+        For example, you can ask for insights, summaries, or visualizations. To see the Python code used for the analysis, just ask: "show me the code".
+      </p>
+
+      <h4 className="mb-2 font-semibold text-foreground">Usage Limits</h4>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>Up to 50 requests per day.</li>
+        <li>File size limit: 20MB.</li>
+        <li>Supported file types: CSV, Excel (.xlsx, .xls).</li>
+      </ul>
+
+      {/* blank line before Privacy header */}
+      <h4 className="mt-3 mb-2 font-semibold text-foreground">Privacy</h4>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>Privacy and Data Retention: All uploaded files and their associated data are automatically deleted 1 day after they are uploaded.</li>
+        <li>Secure Access: All your access is authenticated, only you can access your data and analysis history.</li>
+      </ul>
+    </div>
+  );
+};
+</file>
+
+<file path="components/renderers/ChartRenderer.tsx">
+import React from "react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  TooltipProps,
+} from "recharts";
+import { ValueType, NameType } from "recharts/types/component/DefaultTooltipContent";
+
+export interface Series {
+  label: string;
+  data: number[];
+}
+
+export interface ChartData {
+  kind: string; // 'bar' | 'line'
+  labels: string[];
+  series: Series[];
+}
+
+// Adaptive number formatting: no decimals for large numbers (>=1000), 2 decimals for small
+const formatNumber = (val: any): string => {
+  if (typeof val !== "number" || isNaN(val)) return String(val ?? "");
+  if (Math.abs(val) >= 1000) {
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(val);
+  }
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(val);
+};
+
+// Custom tooltip with backdrop blur and formatted numbers
+const CustomTooltip = ({ active, payload, label }: TooltipProps<ValueType, NameType>) => {
+  if (!active || !payload || !payload.length) return null;
+
+  return (
+    <div className="bg-background/95 border border-border rounded-lg shadow-md p-3 backdrop-blur-sm">
+      <p className="font-medium text-sm mb-2">{label}</p>
+      {payload.map((entry, index) => (
+        <p key={index} className="text-sm" style={{ color: entry.color }}>
+          <span className="font-medium">{entry.name}:</span> {formatNumber(entry.value)}
+        </p>
+      ))}
+    </div>
+  );
+};
+
+export function ChartRenderer({ chartData }: { chartData: ChartData }) {
+  if (!chartData || !Array.isArray(chartData.labels)) {
+    return <div className="text-sm text-muted-foreground">No chart data.</div>;
+  }
+
+  const data = React.useMemo(() => {
+    const rows: any[] = [];
+    const { labels, series } = chartData;
+    const maxLen = Math.max(0, ...series.map((s) => s.data.length));
+    const L = Math.max(labels.length, maxLen);
+    for (let i = 0; i < L; i++) {
+      const row: any = { label: labels[i] ?? String(i) };
+      series.forEach((s, idx) => {
+        row[`s${idx}`] = typeof s.data[i] === "number" ? s.data[i] : 0;
+      });
+      rows.push(row);
+    }
+    return rows;
+  }, [chartData]);
+
+  const isBar = (chartData.kind || "bar").toLowerCase() === "bar";
+
+  // Chart color palette - multiple distinct colors
+  const getChartColor = (index: number): string => {
+    const colors = [
+      '#8884d8', // Purple-blue
+      '#82ca9d', // Teal-green
+      '#ffc658', // Orange-yellow
+      '#ff7c7c', // Coral-red
+      '#8dd1e1', // Sky blue
+      '#d084d0', // Lavender
+      '#a4de6c', // Light green
+    ];
+    return colors[index % colors.length];
+  };
+
+  return (
+    <div className="w-full border rounded-xl p-6 bg-gray-50/30 dark:bg-gray-800/20 shadow-sm hover:shadow-md transition-shadow duration-300">
+      <div className="w-full h-96">
+        <ResponsiveContainer width="100%" height="100%">
+          {isBar ? (
+            <BarChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.1} />
+              <XAxis dataKey="label" stroke="currentColor" strokeOpacity={0.5} />
+              <YAxis axisLine={false} stroke="currentColor" strokeOpacity={0.5} tickFormatter={(v) => formatNumber(v)} />
+              <Tooltip content={<CustomTooltip />} cursor={false} />
+              <Legend />
+              {chartData.series.map((s, idx) => (
+                <Bar key={idx} dataKey={`s${idx}`} name={s.label || `Series ${idx + 1}`} fill={getChartColor(idx)} />
+              ))}
+            </BarChart>
+          ) : (
+            <LineChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.1} />
+              <XAxis dataKey="label" stroke="currentColor" strokeOpacity={0.5} />
+              <YAxis axisLine={false} stroke="currentColor" strokeOpacity={0.5} tickFormatter={(v) => formatNumber(v)} />
+              <Tooltip content={<CustomTooltip />} cursor={false} />
+              <Legend />
+              {chartData.series.map((s, idx) => (
+                <Line key={idx} type="monotone" dataKey={`s${idx}`} name={s.label || `Series ${idx + 1}`} stroke={getChartColor(idx)} strokeWidth={2} dot={false} activeDot={{ r: 6 }} />
+              ))}
+            </LineChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="components/renderers/TableRenderer.tsx">
+import React from "react";
+import { ChevronsUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { cn } from "../ui/utils";
+
+type ColMeta = {
+  name: string;
+  isText: boolean;
+  isPercent: boolean;
+  orderIdx: number;
+};
+
+const isPercentName = (name: string) => {
+  const n = name.toLowerCase();
+  return (
+    n.includes("pct") ||
+    n.includes("percent") ||
+    n.includes("percentage") ||
+    n === "pct_change" ||
+    n.endsWith("_pct")
+  );
+};
+
+const formatNumber = (val: number, asPercent: boolean): string => {
+  const nf0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+  const nf2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (asPercent) return `${nf2.format(val)}%`;
+  return Number.isInteger(val) ? nf0.format(val) : nf2.format(val);
+};
+
+export function TableRenderer({ rows }: { rows: any[] }) {
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const rowsPerPage = 25;
+
+  const colMetas: ColMeta[] = React.useMemo(() => {
+    if (!rows || rows.length === 0) return [];
+    // Use all rows for column detection (no artificial limit)
+    const sample = rows;
+    const seenOrder: Record<string, number> = {};
+    const metas: Record<string, ColMeta> = {} as any;
+    let idxCounter = 0;
+    for (const r of sample) {
+      Object.keys(r || {}).forEach((k) => {
+        if (!(k in seenOrder)) seenOrder[k] = idxCounter++;
+      });
+    }
+    for (const [name, orderIdx] of Object.entries(seenOrder)) {
+      let isText = false;
+      let isPercent = isPercentName(name);
+      for (const row of sample) {
+        const v = (row as any)?.[name];
+        if (v === null || v === undefined) continue;
+        if (typeof v === "string") {
+          // string with % implies percent col if not flagged yet
+          if (v.trim().endsWith("%")) isPercent = true;
+          // treat as text if not purely numeric
+          const n = Number.parseFloat(v);
+          if (!Number.isFinite(n) || String(n) !== v.replace(/[,\s%]/g, "").trim()) {
+            isText = true;
+            break;
+          }
+        } else if (typeof v !== "number") {
+          isText = true;
+          break;
+        }
+      }
+      metas[name] = { name, isText, isPercent, orderIdx };
+    }
+    // Reorder: text first, prioritize 'metric' column to be first among text
+    const arr = Object.values(metas);
+    arr.sort((a, b) => {
+      const aMetric = a.name.toLowerCase() === "metric" ? 0 : 1;
+      const bMetric = b.name.toLowerCase() === "metric" ? 0 : 1;
+      const aGroup = a.isText ? 0 : 1;
+      const bGroup = b.isText ? 0 : 1;
+      if (aGroup !== bGroup) return aGroup - bGroup; // text first
+      if (aGroup === 0 && aMetric !== bMetric) return aMetric - bMetric; // 'metric' first within text
+      return a.orderIdx - b.orderIdx; // stable by first-seen order
+    });
+    return arr;
+  }, [rows]);
+
+  const cols = React.useMemo(() => colMetas.map((m) => m.name), [colMetas]);
+  const metaByCol = React.useMemo(() => Object.fromEntries(colMetas.map((m) => [m.name, m])), [colMetas]);
+
+  const [sortBy, setSortBy] = React.useState<string | null>(null);
+  const [sortDir, setSortDir] = React.useState<"asc" | "desc">("asc");
+
+  const onToggleSort = (col: string) => {
+    if (sortBy !== col) {
+      setSortBy(col);
+      setSortDir("asc");
+    } else {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    }
+    setCurrentPage(1); // Reset to first page when sorting
+  };
+
+  const sortedRows = React.useMemo(() => {
+    // Use all rows provided (no artificial limit)
+    if (!rows || rows.length === 0) return [];
+    if (!sortBy) return rows;
+    const copy = rows.slice();
+    copy.sort((a: any, b: any) => {
+      const av = a?.[sortBy];
+      const bv = b?.[sortBy];
+      // Try numeric compare if both parseable
+      const an = typeof av === "number" ? av : Number.parseFloat(av);
+      const bn = typeof bv === "number" ? bv : Number.parseFloat(bv);
+      const bothNumeric = Number.isFinite(an) && Number.isFinite(bn);
+      let cmp = 0;
+      if (bothNumeric) {
+        cmp = an === bn ? 0 : an < bn ? -1 : 1;
+      } else {
+        const as = String(av ?? "").toLowerCase();
+        const bs = String(bv ?? "").toLowerCase();
+        cmp = as === bs ? 0 : as < bs ? -1 : 1;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [rows, sortBy, sortDir]);
+
+  // Pagination logic
+  const totalPages = Math.ceil(sortedRows.length / rowsPerPage);
+  const startIdx = (currentPage - 1) * rowsPerPage;
+  const endIdx = startIdx + rowsPerPage;
+  const paginatedRows = sortedRows.slice(startIdx, endIdx);
+
+  // Reset to page 1 if current page exceeds total pages
+  React.useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [currentPage, totalPages]);
+
+  if (!rows || rows.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground">No rows to display.</div>
+    );
+  }
+
+  const renderCell = (col: string, value: any) => {
+    if (value === null || value === undefined) return "";
+    const meta = metaByCol[col];
+    const asPercent = !!meta?.isPercent;
+    if (typeof value === "number") return formatNumber(value, asPercent);
+    const s = String(value);
+    if (s.trim().endsWith("%")) {
+      // normalize percentage string to two decimals
+      const n = Number.parseFloat(s.replace(/%/g, ""));
+      if (Number.isFinite(n)) return `${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)}%`;
+      return s;
+    }
+    const n = Number.parseFloat(s.replace(/[,\s]/g, ""));
+    if (Number.isFinite(n)) return formatNumber(n, asPercent);
+    return s;
+  };
+
+  return (
+    <div className="w-full overflow-hidden">
+      <div className="overflow-x-auto overflow-y-auto max-h-[420px]">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 z-10 bg-background">
+            <tr>
+              {cols.map((c, idx) => {
+                const isActive = sortBy === c;
+                const icon = !isActive ? (
+                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-60" />
+                ) : sortDir === "asc" ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                );
+                return (
+                  <th 
+                    key={c} 
+                    className={cn(
+                      "text-left py-3 font-semibold whitespace-nowrap border-b border-border",
+                      idx === 0 ? "pl-8 pr-6" : idx === cols.length - 1 ? "pr-8 pl-6" : "px-6",
+                      !metaByCol[c]?.isText && "text-right"
+                    )}
+                  >
+                    <button
+                      type="button"
+                      className={cn(
+                        "inline-flex items-center gap-1.5 cursor-pointer select-none transition-opacity",
+                        "hover:opacity-80 hover:underline underline-offset-2"
+                      )}
+                      aria-sort={isActive ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                      onClick={() => onToggleSort(c)}
+                    >
+                      <span>{c}</span>
+                      {icon}
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {paginatedRows.map((r, i) => (
+              <tr key={i} className="border-b border-border/10 last:border-b-0 hover:bg-accent/30 transition-colors duration-150">
+                {cols.map((c, idx) => (
+                  <td 
+                    key={c} 
+                    className={cn(
+                      "py-3 whitespace-nowrap max-w-[320px] overflow-hidden text-ellipsis",
+                      idx === 0 ? "pl-8 pr-6 font-medium" : idx === cols.length - 1 ? "pr-8 pl-6" : "px-6",
+                      !metaByCol[c]?.isText && idx !== 0 && "text-right"
+                    )}
+                  >
+                    {renderCell(c, (r as any)?.[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sortedRows.length > rowsPerPage && (
+        <div className="flex items-center justify-between px-8 py-3 border-t border-border/10 text-xs text-muted-foreground">
+          <div>
+            Showing {startIdx + 1}-{Math.min(endIdx, sortedRows.length)} of {sortedRows.length} rows
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className={cn(
+                "px-3 py-1 rounded-md transition-colors",
+                currentPage === 1
+                  ? "text-muted-foreground/50 cursor-not-allowed"
+                  : "text-foreground hover:bg-accent cursor-pointer"
+              )}
+            >
+              Previous
+            </button>
+            <span className="text-xs">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className={cn(
+                "px-3 py-1 rounded-md transition-colors",
+                currentPage === totalPages
+                  ? "text-muted-foreground/50 cursor-not-allowed"
+                  : "text-foreground hover:bg-accent cursor-pointer"
+              )}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="components/ui/button.tsx">
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "./utils";
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+        outline:
+          "border bg-background text-foreground hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
+        lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+        icon: "size-9 rounded-md",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  },
+);
+
+function Button({
+  className,
+  variant,
+  size,
+  asChild = false,
+  ...props
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean;
+  }) {
+  const Comp = asChild ? Slot : "button";
+
+  return (
+    <Comp
+      data-slot="button"
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  );
+}
+
+export { Button, buttonVariants };
+</file>
+
+<file path="components/ui/card.tsx">
+import * as React from "react";
+
+import { cn } from "./utils";
+
+const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div
+      ref={ref}
+      className={cn(
+        "rounded-2xl border border-border/50 bg-card text-card-foreground shadow-sm",
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
+
+Card.displayName = "Card";
+
+const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
+  ),
+);
+
+CardHeader.displayName = "CardHeader";
+
+const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>(
+  ({ className, ...props }, ref) => (
+    <h3
+      ref={ref}
+      className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+      {...props}
+    />
+  ),
+);
+
+CardTitle.displayName = "CardTitle";
+
+const CardDescription = React.forwardRef<
+  HTMLParagraphElement,
+  React.HTMLAttributes<HTMLParagraphElement>
+>(({ className, ...props }, ref) => (
+  <p ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
+));
+
+CardDescription.displayName = "CardDescription";
+
+const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("p-6 pt-0", className)} {...props} />
+  ),
+);
+
+CardContent.displayName = "CardContent";
+
+const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("flex items-center p-6 pt-0", className)} {...props} />
+  ),
+);
+
+CardFooter.displayName = "CardFooter";
+
+export { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle };
+</file>
+
+<file path="components/ui/input.tsx">
+import * as React from "react";
+import { cn } from "./utils";
+
+export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+
+export const Input = React.forwardRef<HTMLInputElement, InputProps>(
+  ({ className, type = "text", ...props }, ref) => {
+    return (
+      <input
+        type={type}
+        className={cn(
+          "flex h-10 w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm",
+          "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          className
+        )}
+        ref={ref}
+        {...props}
+      />
+    );
+  }
+);
+Input.displayName = "Input";
+</file>
+
+<file path="components/ui/label.tsx">
+import * as React from "react";
+import { cn } from "./utils";
+
+export interface LabelProps extends React.LabelHTMLAttributes<HTMLLabelElement> {}
+
+export const Label = React.forwardRef<HTMLLabelElement, LabelProps>(
+  ({ className, ...props }, ref) => (
+    <label
+      ref={ref}
+      className={cn("block text-sm font-medium text-foreground", className)}
+      {...props}
+    />
+  )
+);
+Label.displayName = "Label";
+</file>
+
+<file path="components/ui/popover.tsx">
+"use client"
+
+import * as React from "react"
+import * as PopoverPrimitive from "@radix-ui/react-popover"
+
+import { cn } from "./utils"
+
+const Popover = PopoverPrimitive.Root
+
+const PopoverTrigger = PopoverPrimitive.Trigger
+
+const PopoverContent = React.forwardRef<
+  React.ElementRef<typeof PopoverPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
+>(({ className, align = "center", sideOffset = 4, ...props }, ref) => (
+  <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Content
+      ref={ref}
+      align={align}
+      sideOffset={sideOffset}
+      className={cn(
+        "z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        className
+      )}
+      {...props}
+    />
+  </PopoverPrimitive.Portal>
+))
+PopoverContent.displayName = PopoverPrimitive.Content.displayName
+
+export { Popover, PopoverTrigger, PopoverContent }
+</file>
+
+<file path="components/ui/scroll-area.tsx">
+"use client";
+
+import * as React from "react";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
+
+import { cn } from "./utils";
+
+const ScrollArea = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<typeof ScrollAreaPrimitive.Root>
+>(({ className, children, ...props }, ref) => {
+  return (
+    <ScrollAreaPrimitive.Root
+      ref={ref}
+      data-slot="scroll-area"
+      className={cn("relative", className)}
+      {...props}
+    >
+      <ScrollAreaPrimitive.Viewport
+        data-slot="scroll-area-viewport"
+        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+      >
+        {children}
+      </ScrollAreaPrimitive.Viewport>
+      <ScrollBar />
+      <ScrollAreaPrimitive.Corner />
+    </ScrollAreaPrimitive.Root>
+  );
+});
+ScrollArea.displayName = "ScrollArea";
+
+function ScrollBar({
+  className,
+  orientation = "vertical",
+  ...props
+}: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
+  return (
+    <ScrollAreaPrimitive.ScrollAreaScrollbar
+      data-slot="scroll-area-scrollbar"
+      orientation={orientation}
+      className={cn(
+        "flex touch-none p-px transition-colors select-none",
+        orientation === "vertical" &&
+          "h-full w-2.5 border-l border-l-transparent",
+        orientation === "horizontal" &&
+          "h-2.5 flex-col border-t border-t-transparent",
+        className,
+      )}
+      {...props}
+    >
+      <ScrollAreaPrimitive.ScrollAreaThumb
+        data-slot="scroll-area-thumb"
+        className="bg-border relative flex-1 rounded-full"
+      />
+    </ScrollAreaPrimitive.ScrollAreaScrollbar>
+  );
+}
+
+export { ScrollArea, ScrollBar };
+</file>
+
+<file path="components/ui/separator.tsx">
+import * as React from "react";
+
+import { cn } from "./utils";
+
+const Separator = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & {
+    orientation?: "horizontal" | "vertical";
+    decorative?: boolean;
+  }
+>(({ className, orientation = "horizontal", decorative = true, ...props }, ref) => (
+  <div
+    ref={ref}
+    role={decorative ? "none" : "separator"}
+    aria-orientation={orientation}
+    className={cn(
+      "shrink-0 bg-border",
+      orientation === "horizontal" ? "h-px w-full" : "h-full w-px",
+      className,
+    )}
+    {...props}
+  />
+));
+
+Separator.displayName = "Separator";
+
+export { Separator };
+</file>
+
+<file path="components/ui/sidebar.tsx">
+import * as React from "react"
+import { Slot } from "@radix-ui/react-slot"
+import { cva, type VariantProps } from "class-variance-authority"
+import { ChevronLeft } from "lucide-react"
+
+import { cn } from "@/components/ui/utils"
+
+const SIDEBAR_COOKIE_NAME = "sidebar:state"
+const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
+const SIDEBAR_WIDTH = "16rem"
+const SIDEBAR_WIDTH_MOBILE = "18rem"
+const SIDEBAR_WIDTH_ICON = "3rem"
+
+type SidebarContext = {
+  state: "expanded" | "collapsed"
+  open: boolean
+  setOpen: (open: boolean) => void
+  openMobile: boolean
+  setOpenMobile: (open: boolean) => void
+  isMobile: boolean
+  toggleSidebar: () => void
+}
+
+const SidebarContext = React.createContext<SidebarContext | undefined>(
+  undefined
+)
+
+function useSidebar() {
+  const context = React.useContext(SidebarContext)
+  if (!context) {
+    throw new Error("useSidebar must be used within a SidebarProvider")
+  }
+  return context
+}
+
+const SidebarProvider = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & {
+    defaultOpen?: boolean
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+  }
+>(
+  (
+    {
+      defaultOpen = true,
+      open: openProp,
+      onOpenChange: onOpenChangeProp,
+      className,
+      style,
+      children,
+      ...props
+    },
+    ref
+  ) => {
+    const isMobile = useMediaQuery("(max-width: 768px)")
+    const [openMobile, setOpenMobile] = React.useState(false)
+
+    const [_open, _setOpen] = React.useState(defaultOpen)
+    const open = openProp ?? _open
+    const setOpen = React.useCallback(
+      (value: boolean | ((value: boolean) => boolean)) => {
+        const openValue = typeof value === "function" ? value(open) : value
+        if (onOpenChangeProp) {
+          onOpenChangeProp(openValue)
+        } else {
+          _setOpen(openValue)
+        }
+
+        document.cookie = `${SIDEBAR_COOKIE_NAME}=${openValue}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      },
+      [open, onOpenChangeProp]
+    )
+
+    const toggleSidebar = React.useCallback(() => {
+      return isMobile
+        ? setOpenMobile((open) => !open)
+        : setOpen((open) => !open)
+    }, [isMobile, setOpen])
+
+    const state = open ? "expanded" : "collapsed"
+
+    const value = React.useMemo<SidebarContext>(
+      () => ({
+        state,
+        open,
+        setOpen,
+        isMobile,
+        openMobile,
+        setOpenMobile,
+        toggleSidebar,
+      }),
+      [state, open, setOpen, isMobile, openMobile, toggleSidebar]
+    )
+
+    return (
+      <SidebarContext.Provider value={value}>
+        <div
+          style={
+            {
+              "--sidebar-width": SIDEBAR_WIDTH,
+              "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
+              "--sidebar-width-mobile": SIDEBAR_WIDTH_MOBILE,
+              ...style,
+            } as React.CSSProperties
+          }
+          className={cn(
+            "flex h-full w-full flex-col",
+            className
+          )}
+          ref={ref}
+          {...props}
+        >
+          {children}
+        </div>
+      </SidebarContext.Provider>
+    )
+  }
+)
+SidebarProvider.displayName = "SidebarProvider"
+
+const Sidebar = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & {
+    side?: "left" | "right"
+    variant?: "sidebar" | "floating" | "inset"
+    collapsible?: "offcanvas" | "icon" | "none"
+  }
+>(
+  (
+    {
+      side = "left",
+      variant = "sidebar",
+      collapsible = "offcanvas",
+      className,
+      children,
+      ...props
+    },
+    ref
+  ) => {
+    const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+
+    if (collapsible === "none") {
+      return (
+        <div
+          className={cn(
+            "flex h-full w-[--sidebar-width] flex-col bg-sidebar text-sidebar-foreground",
+            className
+          )}
+          ref={ref}
+          {...props}
+        >
+          {children}
+        </div>
+      )
+    }
+
+    if (isMobile) {
+      return (
+        <div
+          className={cn(
+            "(max-width: 768px) fixed inset-y-0 z-50 flex w-[--sidebar-width-mobile] flex-col bg-sidebar text-sidebar-foreground transition-transform duration-300",
+            side === "left"
+              ? openMobile
+                ? "translate-x-0"
+                : "-translate-x-full"
+              : openMobile
+                ? "translate-x-0"
+                : "translate-x-full",
+            className
+          )}
+          ref={ref}
+          {...props}
+        >
+          {children}
+        </div>
+      )
+    }
+
+    return (
+      <div
+        className={cn(
+          "hidden md:flex h-full w-[--sidebar-width] flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-300",
+          state === "collapsed" && "w-[--sidebar-width-icon]",
+          className
+        )}
+        ref={ref}
+        {...props}
+      >
+        {children}
+      </div>
+    )
+  }
+)
+Sidebar.displayName = "Sidebar"
+
+const SidebarTrigger = React.forwardRef<
+  React.ElementRef<"button">,
+  React.ButtonHTMLAttributes<HTMLButtonElement>
+>(({ className, onClick, ...props }, ref) => {
+  const { toggleSidebar } = useSidebar()
+
+  return (
+    <button
+      ref={ref}
+      onClick={(event) => {
+        onClick?.(event)
+        toggleSidebar()
+      }}
+      className={cn(
+        "inline-flex items-center justify-center rounded-md text-sidebar-foreground hover:bg-sidebar-accent h-9 w-9",
+        className
+      )}
+      {...props}
+    >
+      <ChevronLeft className="h-4 w-4" />
+    </button>
+  )
+})
+SidebarTrigger.displayName = "SidebarTrigger"
+
+const SidebarRail = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-sidebar="rail"
+    className={cn(
+      "absolute inset-y-0 z-20 hidden w-1 bg-sidebar-border transition-colors group-data-[state=collapsed]:w-1 md:flex",
+      className
+    )}
+    {...props}
+  />
+))
+SidebarRail.displayName = "SidebarRail"
+
+const SidebarInset = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    className={cn(
+      "flex h-full w-full flex-col group-data-[collapsible=icon]:flex-1 group-data-[state=collapsed]:min-w-[calc(var(--sidebar-width-icon))]",
+      className
+    )}
+    {...props}
+  />
+))
+SidebarInset.displayName = "SidebarInset"
+
+const SidebarContent = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-sidebar="content"
+    className={cn(
+      "flex min-h-0 flex-1 flex-col overflow-hidden",
+      className
+    )}
+    {...props}
+  />
+))
+SidebarContent.displayName = "SidebarContent"
+
+const SidebarHeader = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-sidebar="header"
+    className={cn("flex flex-col gap-2 p-2", className)}
+    {...props}
+  />
+))
+SidebarHeader.displayName = "SidebarHeader"
+
+const SidebarFooter = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-sidebar="footer"
+    className={cn("flex flex-col gap-2 p-2", className)}
+    {...props}
+  />
+))
+SidebarFooter.displayName = "SidebarFooter"
+
+const SidebarSeparator = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-sidebar="separator"
+    className={cn("mx-2 my-2 h-px bg-sidebar-border", className)}
+    {...props}
+  />
+))
+SidebarSeparator.displayName = "SidebarSeparator"
+
+const sidebarMenuButtonVariants = cva(
+  "peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] hover:bg-sidebar-accent focus-visible:ring-2 active:bg-sidebar-accent disabled:pointer-events-none disabled:opacity-50 group-data-[collapsible=icon]:justify-center group-data-[state=collapsed]:h-9 group-data-[state=collapsed]:w-9 group-data-[state=collapsed]:!p-0 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default: "hover:bg-sidebar-accent",
+        outline:
+          "border border-sidebar-border bg-background hover:bg-sidebar-accent hover:text-sidebar-foreground",
+      },
+      size: {
+        default: "h-8 px-2",
+        sm: "h-7 rounded-md px-2 text-xs",
+        lg: "h-12 rounded-md px-2 text-sm",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+
+const SidebarMenuButton = React.forwardRef<
+  HTMLButtonElement,
+  React.ButtonHTMLAttributes<HTMLButtonElement> &
+  VariantProps<typeof sidebarMenuButtonVariants> & {
+    asChild?: boolean
+    isActive?: boolean
+  }
+>(
+  (
+    { className, variant, size, asChild = false, isActive, ...props },
+    ref
+  ) => {
+    const Comp = asChild ? Slot : "button"
+
+    return (
+      <Comp
+        ref={ref}
+        className={cn(
+          sidebarMenuButtonVariants({ variant, size }),
+          isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
+          className
+        )}
+        {...props}
+      />
+    )
+  }
+)
+SidebarMenuButton.displayName = "SidebarMenuButton"
+
+const SidebarMenu = React.forwardRef<
+  HTMLUListElement,
+  React.HTMLAttributes<HTMLUListElement>
+>(({ className, ...props }, ref) => (
+  <ul
+    ref={ref}
+    data-sidebar="menu"
+    className={cn("flex w-full min-w-0 flex-col gap-1 px-2", className)}
+    {...props}
+  />
+))
+SidebarMenu.displayName = "SidebarMenu"
+
+const SidebarMenuItem = React.forwardRef<
+  HTMLLIElement,
+  React.HTMLAttributes<HTMLLIElement>
+>(({ className, ...props }, ref) => (
+  <li
+    ref={ref}
+    data-sidebar="menu-item"
+    className={cn("group/menu-item relative", className)}
+    {...props}
+  />
+))
+SidebarMenuItem.displayName = "SidebarMenuItem"
+
+function useMediaQuery(query: string) {
+  const [value, setValue] = React.useState(false)
+
+  React.useEffect(() => {
+    function onChange(event: MediaQueryListEvent) {
+      setValue(event.matches)
+    }
+
+    const result = matchMedia(query)
+    setValue(result.matches)
+    result.addEventListener("change", onChange)
+    return () => result.removeEventListener("change", onChange)
+  }, [query])
+
+  return value
+}
+
+export {
+  Sidebar,
+  SidebarProvider,
+  useSidebar,
+  SidebarTrigger,
+  SidebarRail,
+  SidebarInset,
+  SidebarContent,
+  SidebarHeader,
+  SidebarFooter,
+  SidebarSeparator,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+}
+</file>
+
+<file path="components/ui/textarea.tsx">
+import * as React from "react";
+
+import { cn } from "./utils";
+
+const Textarea = React.forwardRef<
+  HTMLTextAreaElement,
+  React.ComponentProps<"textarea">
+>(({ className, ...props }, ref) => {
+  return (
+    <textarea
+      ref={ref}
+      data-slot="textarea"
+      className={cn(
+        "resize-none border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 flex field-sizing-content min-h-16 w-full rounded-md border bg-input-background px-3 py-2 text-base transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
+Textarea.displayName = "Textarea";
+
+export { Textarea };
+</file>
+
+<file path="components/ui/utils.ts">
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+</file>
+
+<file path="context/AuthContext.tsx">
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { auth } from "../lib/firebase";
+import {
+  onIdTokenChanged,
+  signInAnonymously,
+  User,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  GoogleAuthProvider,
+  GithubAuthProvider,
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  setPersistence,
+  browserLocalPersistence,
+  sendPasswordResetEmail,
+} from "firebase/auth";
+import { ensureUserProfile } from "../services/firestore";
+
+interface AuthContextValue {
+  user: User | null;
+  idToken: string | null;
+  loading: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  signInWithGithub: () => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue>({
+  user: null,
+  idToken: null,
+  loading: true,
+  signIn: async () => {},
+  signUp: async () => {},
+  signInWithGoogle: async () => {},
+  signInWithGithub: async () => {},
+  sendPasswordReset: async () => {},
+  signOut: async () => {},
+});
+
+export const AuthProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [idToken, setIdToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    let unsub = () => {};
+
+    async function init() {
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+      } catch (_) {}
+
+      unsub = onIdTokenChanged(auth, async (u) => {
+        setUser(u);
+        if (u) {
+          const tok = await u.getIdToken();
+          setIdToken(tok);
+          await ensureUserProfile(u.uid, { email: u.email || "", displayName: u.displayName || "" });
+        } else {
+          setIdToken(null);
+        }
+        setLoading(false);
+      });
+    }
+
+    init();
+    return () => unsub();
+  }, []);
+
+  const signIn = async (email: string, password: string) => {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    if (cred.user && !cred.user.isAnonymous) {
+      await ensureUserProfile(cred.user.uid, { email: cred.user.email || "", displayName: cred.user.displayName || "" });
+    }
+  };
+
+  const signUp = async (email: string, password: string) => {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    if (cred.user) {
+      await ensureUserProfile(cred.user.uid, { email: cred.user.email || "", displayName: cred.user.displayName || "" });
+    }
+  };
+
+  const signInWithGoogle = async () => {
+    const provider = new GoogleAuthProvider();
+    const cred = await signInWithPopup(auth, provider);
+    if (cred.user) {
+      await ensureUserProfile(cred.user.uid, { email: cred.user.email || "", displayName: cred.user.displayName || "" });
+    }
+  };
+
+  const signInWithGithub = async () => {
+    const provider = new GithubAuthProvider();
+    const cred = await signInWithPopup(auth, provider);
+    if (cred.user) {
+      await ensureUserProfile(cred.user.uid, { email: cred.user.email || "", displayName: cred.user.displayName || "" });
+    }
+  };
+
+  const sendPasswordReset = async (email: string) => {
+    await sendPasswordResetEmail(auth, email);
+  };
+
+  const signOut = async () => {
+    await firebaseSignOut(auth);
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, idToken, loading, signIn, signUp, signInWithGoogle, signInWithGithub, sendPasswordReset, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export function useAuth() {
+  return useContext(AuthContext);
+}
+</file>
+
+<file path="index.css">
+/*! tailwindcss v4.1.3 | MIT License | https://tailwindcss.com */
+@layer properties {
+  @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
+
+    *,
+    :before,
+    :after,
+    ::backdrop {
+      --tw-space-y-reverse: 0;
+      --tw-border-style: solid;
+      --tw-gradient-position: initial;
+      --tw-gradient-from: #0000;
+      --tw-gradient-via: #0000;
+      --tw-gradient-to: #0000;
+      --tw-gradient-stops: initial;
+      --tw-gradient-via-stops: initial;
+      --tw-gradient-from-position: 0%;
+      --tw-gradient-via-position: 50%;
+      --tw-gradient-to-position: 100%;
+      --tw-font-weight: initial;
+      --tw-shadow: 0 0 #0000;
+      --tw-shadow-color: initial;
+      --tw-shadow-alpha: 100%;
+      --tw-inset-shadow: 0 0 #0000;
+      --tw-inset-shadow-color: initial;
+      --tw-inset-shadow-alpha: 100%;
+      --tw-ring-color: initial;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-inset-ring-color: initial;
+      --tw-inset-ring-shadow: 0 0 #0000;
+      --tw-ring-inset: initial;
+      --tw-ring-offset-width: 0px;
+      --tw-ring-offset-color: #fff;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      --tw-outline-style: solid;
+      --tw-backdrop-blur: initial;
+      --tw-backdrop-brightness: initial;
+      --tw-backdrop-contrast: initial;
+      --tw-backdrop-grayscale: initial;
+      --tw-backdrop-hue-rotate: initial;
+      --tw-backdrop-invert: initial;
+      --tw-backdrop-opacity: initial;
+      --tw-backdrop-saturate: initial;
+      --tw-backdrop-sepia: initial;
+      --tw-duration: initial;
+    }
+  }
+}
+
+@layer theme {
+
+  :root,
+  :host {
+    --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --color-white: #fff;
+    --spacing: .25rem;
+    --container-md: 28rem;
+    --container-3xl: 48rem;
+    --text-xs: .75rem;
+    --text-xs--line-height: calc(1 / .75);
+    --text-sm: .875rem;
+    --text-sm--line-height: calc(1.25 / .875);
+    --text-base: 1rem;
+    --text-base--line-height: calc(1.5 / 1);
+    --text-lg: 1.125rem;
+    --text-xl: 1.25rem;
+    --text-2xl: 1.5rem;
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --radius-3xl: 1.5rem;
+    --animate-bounce: bounce 1s infinite;
+    --default-transition-duration: .15s;
+    --default-transition-timing-function: cubic-bezier(.4, 0, .2, 1);
+    --default-font-family: var(--font-sans);
+    --default-font-feature-settings: var(--font-sans--font-feature-settings);
+    --default-font-variation-settings: var(--font-sans--font-variation-settings);
+    --default-mono-font-family: var(--font-mono);
+    --default-mono-font-feature-settings: var(--font-mono--font-feature-settings);
+    --default-mono-font-variation-settings: var(--font-mono--font-variation-settings);
+  }
+}
+
+@layer base {
+
+  *,
+  :after,
+  :before,
+  ::backdrop {
+    box-sizing: border-box;
+    border: 0 solid;
+    margin: 0;
+    padding: 0;
+  }
+
+  ::file-selector-button {
+    box-sizing: border-box;
+    border: 0 solid;
+    margin: 0;
+    padding: 0;
+  }
+
+  html,
+  :host {
+    -webkit-text-size-adjust: 100%;
+    tab-size: 4;
+    line-height: 1.5;
+    font-family: var(--default-font-family, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji");
+    font-feature-settings: var(--default-font-feature-settings, normal);
+    font-variation-settings: var(--default-font-variation-settings, normal);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    line-height: inherit;
+  }
+
+  hr {
+    height: 0;
+    color: inherit;
+    border-top-width: 1px;
+  }
+
+  abbr:where([title]) {
+    -webkit-text-decoration: underline dotted;
+    text-decoration: underline dotted;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  a {
+    color: inherit;
+    -webkit-text-decoration: inherit;
+    -webkit-text-decoration: inherit;
+    text-decoration: inherit;
+  }
+
+  b,
+  strong {
+    font-weight: bolder;
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+    font-feature-settings: var(--default-mono-font-feature-settings, normal);
+    font-variation-settings: var(--default-mono-font-variation-settings, normal);
+    font-size: 1em;
+  }
+
+  small {
+    font-size: 80%;
+  }
+
+  sub,
+  sup {
+    vertical-align: baseline;
+    font-size: 75%;
+    line-height: 0;
+    position: relative;
+  }
+
+  sub {
+    bottom: -.25em;
+  }
+
+  sup {
+    top: -.5em;
+  }
+
+  table {
+    text-indent: 0;
+    border-color: inherit;
+    border-collapse: collapse;
+  }
+
+  :-moz-focusring {
+    outline: auto;
+  }
+
+  progress {
+    vertical-align: baseline;
+  }
+
+  summary {
+    display: list-item;
+  }
+
+  ol,
+  ul,
+  menu {
+    list-style: none;
+  }
+
+  img,
+  svg,
+  video,
+  canvas,
+  audio,
+  iframe,
+  embed,
+  object {
+    vertical-align: middle;
+    display: block;
+  }
+
+  img,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  button,
+  input,
+  select,
+  optgroup,
+  textarea {
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    opacity: 1;
+    background-color: #0000;
+    border-radius: 0;
+  }
+
+  ::file-selector-button {
+    font: inherit;
+    font-feature-settings: inherit;
+    font-variation-settings: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+    opacity: 1;
+    background-color: #0000;
+    border-radius: 0;
+  }
+
+  :where(select:is([multiple], [size])) optgroup {
+    font-weight: bolder;
+  }
+
+  :where(select:is([multiple], [size])) optgroup option {
+    padding-inline-start: 20px;
+  }
+
+  ::file-selector-button {
+    margin-inline-end: 4px;
+  }
+
+  ::placeholder {
+    opacity: 1;
+    color: currentColor;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    ::placeholder {
+      color: color-mix(in oklab, currentColor 50%, transparent);
+    }
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  ::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+
+  ::-webkit-date-and-time-value {
+    min-height: 1lh;
+    text-align: inherit;
+  }
+
+  ::-webkit-datetime-edit {
+    display: inline-flex;
+  }
+
+  ::-webkit-datetime-edit-fields-wrapper {
+    padding: 0;
+  }
+
+  ::-webkit-datetime-edit {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-year-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-month-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-day-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-hour-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-minute-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-second-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-millisecond-field {
+    padding-block: 0;
+  }
+
+  ::-webkit-datetime-edit-meridiem-field {
+    padding-block: 0;
+  }
+
+  :-moz-ui-invalid {
+    box-shadow: none;
+  }
+
+  button,
+  input:where([type="button"], [type="reset"], [type="submit"]) {
+    appearance: button;
+  }
+
+  ::file-selector-button {
+    appearance: button;
+  }
+
+  ::-webkit-inner-spin-button {
+    height: auto;
+  }
+
+  ::-webkit-outer-spin-button {
+    height: auto;
+  }
+
+  [hidden]:where(:not([hidden="until-found"])) {
+    display: none !important;
+  }
+
+  * {
+    border-color: var(--border);
+    outline-color: var(--ring);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    * {
+      outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+  }
+
+  * {
+    border-color: var(--border);
+    outline-color: var(--ring);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    * {
+      outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) p {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) label,
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}
+
+/* --- Custom utilities for chat prose and cursor --- */
+@layer utilities {
+  .prose {
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  /* Add a bit more air between paragraphs */
+  .prose :where(p) {
+    margin-block: 0.85rem;
+  }
+
+  @keyframes blink {
+
+    0%,
+    50%,
+    100% {
+      opacity: 1;
+    }
+
+    25%,
+    75% {
+      opacity: 0;
+    }
+  }
+
+  .animate-blink {
+    animation: blink 1s step-end infinite;
+  }
+}
+
+@layer utilities {
+  .fixed {
+    position: fixed;
+  }
+
+  .relative {
+    position: relative;
+  }
+
+  .top-0 {
+    top: calc(var(--spacing) * 0);
+  }
+
+  .right-0 {
+    right: calc(var(--spacing) * 0);
+  }
+
+  .bottom-0 {
+    bottom: calc(var(--spacing) * 0);
+  }
+
+  .left-0 {
+    left: calc(var(--spacing) * 0);
+  }
+
+  .z-30 {
+    z-index: 30;
+  }
+
+  .z-40 {
+    z-index: 40;
+  }
+
+  .z-50 {
+    z-index: 50;
+  }
+
+  .mx-auto {
+    margin-inline: auto;
+  }
+
+  .mt-2 {
+    margin-top: calc(var(--spacing) * 2);
+  }
+
+  .mt-3 {
+    margin-top: calc(var(--spacing) * 3);
+  }
+
+  .mr-0 {
+    margin-right: calc(var(--spacing) * 0);
+  }
+
+  .mr-auto {
+    margin-right: auto;
+  }
+
+  .mb-1 {
+    margin-bottom: calc(var(--spacing) * 1);
+  }
+
+  .mb-4 {
+    margin-bottom: calc(var(--spacing) * 4);
+  }
+
+  .ml-0 {
+    margin-left: calc(var(--spacing) * 0);
+  }
+
+  .ml-2 {
+    margin-left: calc(var(--spacing) * 2);
+  }
+
+  .ml-auto {
+    margin-left: auto;
+  }
+
+  .flex {
+    display: flex;
+  }
+
+  .grid {
+    display: grid;
+  }
+
+  .inline-flex {
+    display: inline-flex;
+  }
+
+  .field-sizing-content {
+    field-sizing: content;
+  }
+
+  .size-4 {
+    width: calc(var(--spacing) * 4);
+    height: calc(var(--spacing) * 4);
+  }
+
+  .size-9 {
+    width: calc(var(--spacing) * 9);
+    height: calc(var(--spacing) * 9);
+  }
+
+  .size-full {
+    width: 100%;
+    height: 100%;
+  }
+
+  .h-2 {
+    height: calc(var(--spacing) * 2);
+  }
+
+  .h-2\.5 {
+    height: calc(var(--spacing) * 2.5);
+  }
+
+  .h-4 {
+    height: calc(var(--spacing) * 4);
+  }
+
+  .h-5 {
+    height: calc(var(--spacing) * 5);
+  }
+
+  .h-6 {
+    height: calc(var(--spacing) * 6);
+  }
+
+  .h-8 {
+    height: calc(var(--spacing) * 8);
+  }
+
+  .h-9 {
+    height: calc(var(--spacing) * 9);
+  }
+
+  .h-10 {
+    height: calc(var(--spacing) * 10);
+  }
+
+  .h-14 {
+    height: calc(var(--spacing) * 14);
+  }
+
+  .h-full {
+    height: 100%;
+  }
+
+  .max-h-\[200px\] {
+    max-height: 200px;
+  }
+
+  .min-h-16 {
+    min-height: calc(var(--spacing) * 16);
+  }
+
+  .min-h-\[24px\] {
+    min-height: 24px;
+  }
+
+  .w-2 {
+    width: calc(var(--spacing) * 2);
+  }
+
+  .w-2\.5 {
+    width: calc(var(--spacing) * 2.5);
+  }
+
+  .w-4 {
+    width: calc(var(--spacing) * 4);
+  }
+
+  .w-5 {
+    width: calc(var(--spacing) * 5);
+  }
+
+  .w-6 {
+    width: calc(var(--spacing) * 6);
+  }
+
+  .w-8 {
+    width: calc(var(--spacing) * 8);
+  }
+
+  .w-16 {
+    width: calc(var(--spacing) * 16);
+  }
+
+  .w-64 {
+    width: calc(var(--spacing) * 64);
+  }
+
+  .w-full {
+    width: 100%;
+  }
+
+  .max-w-3xl {
+    max-width: var(--container-3xl);
+  }
+
+  .max-w-md {
+    max-width: var(--container-md);
+  }
+
+  .min-w-0 {
+    min-width: calc(var(--spacing) * 0);
+  }
+
+  .flex-1 {
+    flex: 1;
+  }
+
+  .flex-shrink-0,
+  .shrink-0 {
+    flex-shrink: 0;
+  }
+
+  .animate-bounce {
+    animation: var(--animate-bounce);
+  }
+
+  .cursor-pointer {
+    cursor: pointer;
+  }
+
+  .touch-none {
+    touch-action: none;
+  }
+
+  .resize-none {
+    resize: none;
+  }
+
+  .flex-col {
+    flex-direction: column;
+  }
+
+  .items-center {
+    align-items: center;
+  }
+
+  .items-end {
+    align-items: flex-end;
+  }
+
+  .justify-between {
+    justify-content: space-between;
+  }
+
+  .justify-center {
+    justify-content: center;
+  }
+
+  .justify-end {
+    justify-content: flex-end;
+  }
+
+  .justify-start {
+    justify-content: flex-start;
+  }
+
+  .gap-1 {
+    gap: calc(var(--spacing) * 1);
+  }
+
+  .gap-1\.5 {
+    gap: calc(var(--spacing) * 1.5);
+  }
+
+  .gap-2 {
+    gap: calc(var(--spacing) * 2);
+  }
+
+  .gap-3 {
+    gap: calc(var(--spacing) * 3);
+  }
+
+  .gap-6 {
+    gap: calc(var(--spacing) * 6);
+  }
+
+  :where(.space-y-1 > :not(:last-child)) {
+    --tw-space-y-reverse: 0;
+    margin-block-start: calc(calc(var(--spacing) * 1) * var(--tw-space-y-reverse));
+    margin-block-end: calc(calc(var(--spacing) * 1) * calc(1 - var(--tw-space-y-reverse)));
+  }
+
+  :where(.space-y-2 > :not(:last-child)) {
+    --tw-space-y-reverse: 0;
+    margin-block-start: calc(calc(var(--spacing) * 2) * var(--tw-space-y-reverse));
+    margin-block-end: calc(calc(var(--spacing) * 2) * calc(1 - var(--tw-space-y-reverse)));
+  }
+
+  .truncate {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .rounded-3xl {
+    border-radius: var(--radius-3xl);
+  }
+
+  .rounded-\[inherit\] {
+    border-radius: inherit;
+  }
+
+  .rounded-full {
+    border-radius: 3.40282e38px;
+  }
+
+  .rounded-lg {
+    border-radius: var(--radius);
+  }
+
+  .rounded-md {
+    border-radius: calc(var(--radius) - 2px);
+  }
+
+  .border {
+    border-style: var(--tw-border-style);
+    border-width: 1px;
+  }
+
+  .border-0 {
+    border-style: var(--tw-border-style);
+    border-width: 0;
+  }
+
+  .border-t {
+    border-top-style: var(--tw-border-style);
+    border-top-width: 1px;
+  }
+
+  .border-r {
+    border-right-style: var(--tw-border-style);
+    border-right-width: 1px;
+  }
+
+  .border-b {
+    border-bottom-style: var(--tw-border-style);
+    border-bottom-width: 1px;
+  }
+
+  .border-l {
+    border-left-style: var(--tw-border-style);
+    border-left-width: 1px;
+  }
+
+  .border-border {
+    border-color: var(--border);
+  }
+
+  .border-input {
+    border-color: var(--input);
+  }
+
+  .border-sidebar-border {
+    border-color: var(--sidebar-border);
+  }
+
+  .border-t-transparent {
+    border-top-color: #0000;
+  }
+
+  .border-l-transparent {
+    border-left-color: #0000;
+  }
+
+  .bg-background {
+    background-color: var(--background);
+  }
+
+  .bg-background\/95 {
+    background-color: var(--background);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .bg-background\/95 {
+      background-color: color-mix(in oklab, var(--background) 95%, transparent);
+    }
+  }
+
+  .bg-border {
+    background-color: var(--border);
+  }
+
+  .bg-destructive {
+    background-color: var(--destructive);
+  }
+
+  .bg-input-background {
+    background-color: var(--input-background);
+  }
+
+  .bg-muted-foreground {
+    background-color: var(--muted-foreground);
+  }
+
+  .bg-primary {
+    background-color: var(--primary);
+  }
+
+  .bg-secondary {
+    background-color: var(--secondary);
+  }
+
+  .bg-sidebar {
+    background-color: var(--sidebar);
+  }
+
+  .bg-sidebar-accent {
+    background-color: var(--sidebar-accent);
+  }
+
+  .bg-sidebar-accent\/30 {
+    background-color: var(--sidebar-accent);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .bg-sidebar-accent\/30 {
+      background-color: color-mix(in oklab, var(--sidebar-accent) 30%, transparent);
+    }
+  }
+
+  .bg-sidebar-primary {
+    background-color: var(--sidebar-primary);
+  }
+
+  .bg-transparent {
+    background-color: #0000;
+  }
+
+  .bg-gradient-to-t {
+    --tw-gradient-position: to top in oklab;
+    background-image: linear-gradient(var(--tw-gradient-stops));
+  }
+
+  .from-background {
+    --tw-gradient-from: var(--background);
+    --tw-gradient-stops: var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) var(--tw-gradient-to-position));
+  }
+
+  .via-background {
+    --tw-gradient-via: var(--background);
+    --tw-gradient-via-stops: var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-via) var(--tw-gradient-via-position), var(--tw-gradient-to) var(--tw-gradient-to-position);
+    --tw-gradient-stops: var(--tw-gradient-via-stops);
+  }
+
+  .to-transparent {
+    --tw-gradient-to: transparent;
+    --tw-gradient-stops: var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) var(--tw-gradient-to-position));
+  }
+
+  .p-0 {
+    padding: calc(var(--spacing) * 0);
+  }
+
+  .p-2 {
+    padding: calc(var(--spacing) * 2);
+  }
+
+  .p-3 {
+    padding: calc(var(--spacing) * 3);
+  }
+
+  .p-8 {
+    padding: calc(var(--spacing) * 8);
+  }
+
+  .p-px {
+    padding: 1px;
+  }
+
+  .px-2 {
+    padding-inline: calc(var(--spacing) * 2);
+  }
+
+  .px-3 {
+    padding-inline: calc(var(--spacing) * 3);
+  }
+
+  .px-4 {
+    padding-inline: calc(var(--spacing) * 4);
+  }
+
+  .px-6 {
+    padding-inline: calc(var(--spacing) * 6);
+  }
+
+  .py-2 {
+    padding-block: calc(var(--spacing) * 2);
+  }
+
+  .py-2\.5 {
+    padding-block: calc(var(--spacing) * 2.5);
+  }
+
+  .py-3 {
+    padding-block: calc(var(--spacing) * 3);
+  }
+
+  .py-8 {
+    padding-block: calc(var(--spacing) * 8);
+  }
+
+  .pt-1 {
+    padding-top: calc(var(--spacing) * 1);
+  }
+
+  .pt-8 {
+    padding-top: calc(var(--spacing) * 8);
+  }
+
+  .pt-14 {
+    padding-top: calc(var(--spacing) * 14);
+  }
+
+  .pb-4 {
+    padding-bottom: calc(var(--spacing) * 4);
+  }
+
+  .pb-32 {
+    padding-bottom: calc(var(--spacing) * 32);
+  }
+
+  .text-center {
+    text-align: center;
+  }
+
+  .text-left {
+    text-align: left;
+  }
+
+  .text-base {
+    font-size: var(--text-base);
+    line-height: var(--tw-leading, var(--text-base--line-height));
+  }
+
+  .text-sm {
+    font-size: var(--text-sm);
+    line-height: var(--tw-leading, var(--text-sm--line-height));
+  }
+
+  .text-xs {
+    font-size: var(--text-xs);
+    line-height: var(--tw-leading, var(--text-xs--line-height));
+  }
+
+  .font-medium {
+    --tw-font-weight: var(--font-weight-medium);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .break-words {
+    overflow-wrap: break-word;
+  }
+
+  .whitespace-nowrap {
+    white-space: nowrap;
+  }
+
+  .whitespace-pre-wrap {
+    white-space: pre-wrap;
+  }
+
+  .text-foreground {
+    color: var(--foreground);
+  }
+
+  .text-muted-foreground {
+    color: var(--muted-foreground);
+  }
+
+  .text-primary {
+    color: var(--primary);
+  }
+
+  .text-primary-foreground {
+    color: var(--primary-foreground);
+  }
+
+  .text-secondary-foreground {
+    color: var(--secondary-foreground);
+  }
+
+  .text-sidebar-accent-foreground {
+    color: var(--sidebar-accent-foreground);
+  }
+
+  .text-sidebar-foreground {
+    color: var(--sidebar-foreground);
+  }
+
+  .text-sidebar-primary-foreground {
+    color: var(--sidebar-primary-foreground);
+  }
+
+  .text-white {
+    color: var(--color-white);
+  }
+
+  .underline-offset-4 {
+    text-underline-offset: 4px;
+  }
+
+  .shadow-lg {
+    --tw-shadow: 0 10px 15px -3px var(--tw-shadow-color, #0000001a), 0 4px 6px -4px var(--tw-shadow-color, #0000001a);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+  }
+
+  .outline {
+    outline-style: var(--tw-outline-style);
+    outline-width: 1px;
+  }
+
+  .backdrop-blur {
+    --tw-backdrop-blur: blur(8px);
+    -webkit-backdrop-filter: var(--tw-backdrop-blur, ) var(--tw-backdrop-brightness, ) var(--tw-backdrop-contrast, ) var(--tw-backdrop-grayscale, ) var(--tw-backdrop-hue-rotate, ) var(--tw-backdrop-invert, ) var(--tw-backdrop-opacity, ) var(--tw-backdrop-saturate, ) var(--tw-backdrop-sepia, );
+    backdrop-filter: var(--tw-backdrop-blur, ) var(--tw-backdrop-brightness, ) var(--tw-backdrop-contrast, ) var(--tw-backdrop-grayscale, ) var(--tw-backdrop-hue-rotate, ) var(--tw-backdrop-invert, ) var(--tw-backdrop-opacity, ) var(--tw-backdrop-saturate, ) var(--tw-backdrop-sepia, );
+  }
+
+  .backdrop-filter {
+    -webkit-backdrop-filter: var(--tw-backdrop-blur, ) var(--tw-backdrop-brightness, ) var(--tw-backdrop-contrast, ) var(--tw-backdrop-grayscale, ) var(--tw-backdrop-hue-rotate, ) var(--tw-backdrop-invert, ) var(--tw-backdrop-opacity, ) var(--tw-backdrop-saturate, ) var(--tw-backdrop-sepia, );
+    backdrop-filter: var(--tw-backdrop-blur, ) var(--tw-backdrop-brightness, ) var(--tw-backdrop-contrast, ) var(--tw-backdrop-grayscale, ) var(--tw-backdrop-hue-rotate, ) var(--tw-backdrop-invert, ) var(--tw-backdrop-opacity, ) var(--tw-backdrop-saturate, ) var(--tw-backdrop-sepia, );
+  }
+
+  .transition-\[color\,box-shadow\] {
+    transition-property: color, box-shadow;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+
+  .transition-all {
+    transition-property: all;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+
+  .transition-colors {
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+
+  .duration-300 {
+    --tw-duration: .3s;
+    transition-duration: .3s;
+  }
+
+  .outline-none {
+    --tw-outline-style: none;
+    outline-style: none;
+  }
+
+  .select-none {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .placeholder\:text-muted-foreground::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  @media (hover: hover) {
+    .hover\:bg-accent:hover {
+      background-color: var(--accent);
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:bg-destructive\/90:hover {
+      background-color: var(--destructive);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-destructive\/90:hover {
+        background-color: color-mix(in oklab, var(--destructive) 90%, transparent);
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:bg-primary\/90:hover {
+      background-color: var(--primary);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-primary\/90:hover {
+        background-color: color-mix(in oklab, var(--primary) 90%, transparent);
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:bg-secondary\/80:hover {
+      background-color: var(--secondary);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-secondary\/80:hover {
+        background-color: color-mix(in oklab, var(--secondary) 80%, transparent);
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:bg-sidebar-accent\/50:hover {
+      background-color: var(--sidebar-accent);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-sidebar-accent\/50:hover {
+        background-color: color-mix(in oklab, var(--sidebar-accent) 50%, transparent);
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:text-accent-foreground:hover {
+      color: var(--accent-foreground);
+    }
+  }
+
+  @media (hover: hover) {
+    .hover\:underline:hover {
+      text-decoration-line: underline;
+    }
+  }
+
+  .focus-visible\:border-ring:focus-visible {
+    border-color: var(--ring);
+  }
+
+  .focus-visible\:ring-0:focus-visible {
+    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(0px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+  }
+
+  .focus-visible\:ring-\[3px\]:focus-visible {
+    --tw-ring-shadow: var(--tw-ring-inset, ) 0 0 0 calc(3px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+  }
+
+  .focus-visible\:ring-destructive\/20:focus-visible {
+    --tw-ring-color: var(--destructive);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .focus-visible\:ring-destructive\/20:focus-visible {
+      --tw-ring-color: color-mix(in oklab, var(--destructive) 20%, transparent);
+    }
+  }
+
+  .focus-visible\:ring-ring\/50:focus-visible {
+    --tw-ring-color: var(--ring);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .focus-visible\:ring-ring\/50:focus-visible {
+      --tw-ring-color: color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+  }
+
+  .focus-visible\:ring-offset-0:focus-visible {
+    --tw-ring-offset-width: 0px;
+    --tw-ring-offset-shadow: var(--tw-ring-inset, ) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  }
+
+  .focus-visible\:outline-1:focus-visible {
+    outline-style: var(--tw-outline-style);
+    outline-width: 1px;
+  }
+
+  .disabled\:pointer-events-none:disabled {
+    pointer-events: none;
+  }
+
+  .disabled\:cursor-not-allowed:disabled {
+    cursor: not-allowed;
+  }
+
+  .disabled\:opacity-50:disabled {
+    opacity: .5;
+  }
+
+  .has-\[\>svg\]\:px-2\.5:has(> svg) {
+    padding-inline: calc(var(--spacing) * 2.5);
+  }
+
+  .has-\[\>svg\]\:px-3:has(> svg) {
+    padding-inline: calc(var(--spacing) * 3);
+  }
+
+  .has-\[\>svg\]\:px-4:has(> svg) {
+    padding-inline: calc(var(--spacing) * 4);
+  }
+
+  .aria-invalid\:border-destructive[aria-invalid="true"] {
+    border-color: var(--destructive);
+  }
+
+  .aria-invalid\:ring-destructive\/20[aria-invalid="true"] {
+    --tw-ring-color: var(--destructive);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .aria-invalid\:ring-destructive\/20[aria-invalid="true"] {
+      --tw-ring-color: color-mix(in oklab, var(--destructive) 20%, transparent);
+    }
+  }
+
+  @supports ((-webkit-backdrop-filter: var(--tw)) or (backdrop-filter: var(--tw))) {
+    .supports-\[backdrop-filter\]\:bg-background\/60 {
+      background-color: var(--background);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .supports-\[backdrop-filter\]\:bg-background\/60 {
+        background-color: color-mix(in oklab, var(--background) 60%, transparent);
+      }
+    }
+  }
+
+  @media (width >=48rem) {
+    .md\:text-sm {
+      font-size: var(--text-sm);
+      line-height: var(--tw-leading, var(--text-sm--line-height));
+    }
+  }
+
+  .dark\:border-input:is(.dark *) {
+    border-color: var(--input);
+  }
+
+  .dark\:bg-destructive\/60:is(.dark *) {
+    background-color: var(--destructive);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .dark\:bg-destructive\/60:is(.dark *) {
+      background-color: color-mix(in oklab, var(--destructive) 60%, transparent);
+    }
+  }
+
+  .dark\:bg-input\/30:is(.dark *) {
+    background-color: var(--input);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .dark\:bg-input\/30:is(.dark *) {
+      background-color: color-mix(in oklab, var(--input) 30%, transparent);
+    }
+  }
+
+  @media (hover: hover) {
+    .dark\:hover\:bg-accent\/50:is(.dark *):hover {
+      background-color: var(--accent);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .dark\:hover\:bg-accent\/50:is(.dark *):hover {
+        background-color: color-mix(in oklab, var(--accent) 50%, transparent);
+      }
+    }
+  }
+
+  @media (hover: hover) {
+    .dark\:hover\:bg-input\/50:is(.dark *):hover {
+      background-color: var(--input);
+    }
+
+    @supports (color: color-mix(in lab, red, red)) {
+      .dark\:hover\:bg-input\/50:is(.dark *):hover {
+        background-color: color-mix(in oklab, var(--input) 50%, transparent);
+      }
+    }
+  }
+
+  .dark\:focus-visible\:ring-destructive\/40:is(.dark *):focus-visible {
+    --tw-ring-color: var(--destructive);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .dark\:focus-visible\:ring-destructive\/40:is(.dark *):focus-visible {
+      --tw-ring-color: color-mix(in oklab, var(--destructive) 40%, transparent);
+    }
+  }
+
+  .dark\:aria-invalid\:ring-destructive\/40:is(.dark *)[aria-invalid="true"] {
+    --tw-ring-color: var(--destructive);
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .dark\:aria-invalid\:ring-destructive\/40:is(.dark *)[aria-invalid="true"] {
+      --tw-ring-color: color-mix(in oklab, var(--destructive) 40%, transparent);
+    }
+  }
+
+  .\[\&_svg\]\:pointer-events-none svg {
+    pointer-events: none;
+  }
+
+  .\[\&_svg\]\:shrink-0 svg {
+    flex-shrink: 0;
+  }
+
+  .\[\&_svg\:not\(\[class\*\=\'size-\'\]\)\]\:size-4 svg:not([class*="size-"]) {
+    width: calc(var(--spacing) * 4);
+    height: calc(var(--spacing) * 4);
+  }
+}
+
+:root {
+  --font-size: 16px;
+  --background: #fff;
+  --foreground: oklch(.145 0 0);
+  --card: #fff;
+  --card-foreground: oklch(.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(.145 0 0);
+  --primary: #030213;
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(.95 .0058 264.53);
+  --secondary-foreground: #030213;
+  --muted: #ececf0;
+  --muted-foreground: #717182;
+  --accent: #e9ebef;
+  --accent-foreground: #030213;
+  --destructive: #d4183d;
+  --destructive-foreground: #fff;
+  --border: #0000001a;
+  --input: transparent;
+  --input-background: #f3f3f5;
+  --switch-background: #cbced4;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: oklch(.708 0 0);
+  --chart-1: oklch(.646 .222 41.116);
+  --chart-2: oklch(.6 .118 184.704);
+  --chart-3: oklch(.398 .07 227.392);
+  --chart-4: oklch(.828 .189 84.429);
+  --chart-5: oklch(.769 .188 70.08);
+  --radius: .625rem;
+  --sidebar: oklch(.985 0 0);
+  --sidebar-foreground: oklch(.145 0 0);
+  --sidebar-primary: #030213;
+  --sidebar-primary-foreground: oklch(.985 0 0);
+  --sidebar-accent: oklch(.97 0 0);
+  --sidebar-accent-foreground: oklch(.205 0 0);
+  --sidebar-border: oklch(.922 0 0);
+  --sidebar-ring: oklch(.708 0 0);
+}
+
+.dark {
+  --background: oklch(.145 0 0);
+  --foreground: oklch(.985 0 0);
+  --card: oklch(.145 0 0);
+  --card-foreground: oklch(.985 0 0);
+  --popover: oklch(.145 0 0);
+  --popover-foreground: oklch(.985 0 0);
+  --primary: oklch(.985 0 0);
+  --primary-foreground: oklch(.205 0 0);
+  --secondary: oklch(.269 0 0);
+  --secondary-foreground: oklch(.985 0 0);
+  --muted: oklch(.269 0 0);
+  --muted-foreground: oklch(.708 0 0);
+  --accent: oklch(.269 0 0);
+  --accent-foreground: oklch(.985 0 0);
+  --destructive: oklch(.396 .141 25.723);
+  --destructive-foreground: oklch(.637 .237 25.331);
+  --border: oklch(.269 0 0);
+  --input: oklch(.269 0 0);
+  --ring: oklch(.439 0 0);
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --chart-1: oklch(.488 .243 264.376);
+  --chart-2: oklch(.696 .17 162.48);
+  --chart-3: oklch(.769 .188 70.08);
+  --chart-4: oklch(.627 .265 303.9);
+  --chart-5: oklch(.645 .246 16.439);
+  --sidebar: oklch(.205 0 0);
+  --sidebar-foreground: oklch(.985 0 0);
+  --sidebar-primary: oklch(.488 .243 264.376);
+  --sidebar-primary-foreground: oklch(.985 0 0);
+  --sidebar-accent: oklch(.269 0 0);
+  --sidebar-accent-foreground: oklch(.985 0 0);
+  --sidebar-border: oklch(.269 0 0);
+  --sidebar-ring: oklch(.439 0 0);
+}
+
+html {
+  font-size: var(--font-size);
+}
+
+@property --tw-space-y-reverse {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --tw-border-style {
+  syntax: "*";
+  inherits: false;
+  initial-value: solid;
+}
+
+@property --tw-gradient-position {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-gradient-from {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #0000;
+}
+
+@property --tw-gradient-via {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #0000;
+}
+
+@property --tw-gradient-to {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #0000;
+}
+
+@property --tw-gradient-stops {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-gradient-via-stops {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-gradient-from-position {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@property --tw-gradient-via-position {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 50%;
+}
+
+@property --tw-gradient-to-position {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --tw-font-weight {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-shadow {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0 0 #0000;
+}
+
+@property --tw-shadow-color {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-shadow-alpha {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --tw-inset-shadow {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0 0 #0000;
+}
+
+@property --tw-inset-shadow-color {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-inset-shadow-alpha {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --tw-ring-color {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-ring-shadow {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0 0 #0000;
+}
+
+@property --tw-inset-ring-color {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-inset-ring-shadow {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0 0 #0000;
+}
+
+@property --tw-ring-inset {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-ring-offset-width {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --tw-ring-offset-color {
+  syntax: "*";
+  inherits: false;
+  initial-value: #fff;
+}
+
+@property --tw-ring-offset-shadow {
+  syntax: "*";
+  inherits: false;
+  initial-value: 0 0 #0000;
+}
+
+@property --tw-outline-style {
+  syntax: "*";
+  inherits: false;
+  initial-value: solid;
+}
+
+@property --tw-backdrop-blur {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-brightness {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-contrast {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-grayscale {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-hue-rotate {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-invert {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-opacity {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-saturate {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-backdrop-sepia {
+  syntax: "*";
+  inherits: false
+}
+
+@property --tw-duration {
+  syntax: "*";
+  inherits: false
+}
+
+@keyframes bounce {
+
+  0%,
+  100% {
+    animation-timing-function: cubic-bezier(.8, 0, 1, 1);
+    transform: translateY(-25%);
+  }
+
+  50% {
+    animation-timing-function: cubic-bezier(0, 0, .2, 1);
+    transform: none;
+  }
+}
+</file>
+
+<file path="lib/firebase.ts">
+import { initializeApp, getApps } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+
+// ✅ Read Firebase config from environment variables (.env.development / .env.production)
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+};
+
+// ✅ Initialize Firebase only once (prevents duplicate app errors during hot reloads)
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export default app;
+</file>
+
+<file path="main.tsx">
+import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App.tsx";
+import "./styles/tailwind.css";
+import { AuthProvider } from "./context/AuthContext";
+import { BrowserRouter } from "react-router-dom";
+
+createRoot(document.getElementById("root")!).render(
+  <AuthProvider>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </AuthProvider>
+);
+</file>
+
+<file path="pages/ChatPage.tsx">
+import React, { useState, useRef, useEffect } from "react";
+import { ChatSidebar } from "../components/ChatSidebar";
+import { ChatMessage, type Message } from "../components/ChatMessage";
+import { ChatInput } from "../components/ChatInput";
+import { ChatHeader } from "../components/ChatHeader";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { useAuth } from "../context/AuthContext";
+import {
+  ensureSession,
+  updateSessionDataset,
+  saveUserMessage,
+  getRecentSessionsWithMessages,
+  subscribeDatasetMeta,
+  subscribeUserProfile,
+  incrementDailyUsage,
+  saveAssistantMessage,
+  resetDailyIfNeeded,
+} from "../services/firestore";
+import { getSignedUploadUrl, putToSignedUrl, streamChat, type ChatEvent } from "../services/api";
+
+interface Conversation {
+  id: string;
+  title: string;
+  timestamp: Date;
+  messages: Message[];
+  datasetId?: string;
+}
+
+interface UserProfile {
+  displayName?: string;
+  email?: string;
+  plan?: string;
+  quota?: number;
+  messagesToday?: number;
+}
+
+export default function ChatPage() {
+  const { idToken, loading, user, signOut } = useAuth() as any;
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const prevConvIdRef = useRef<string | null>(null);
+  const placeholderIdRef = useRef<string | null>(null);
+  const didInitRef = useRef<boolean>(false);
+  const datasetMetaSubsRef = useRef<Record<string, () => void>>({});
+  const uploadMsgIdByConvRef = useRef<Record<string, string | null>>({});
+  const codeInsertedByConvRef = useRef<Record<string, boolean>>({});
+  const codeMsgIdByConvRef = useRef<Record<string, string | null>>({});
+  const summaryStreamTimerRef = useRef<number | null>(null);
+  const summaryStreamingRef = useRef<boolean>(false);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  const dailyLimit = profile?.quota ?? 50;
+  const dailyUsed = profile?.messagesToday ?? 0;
+  const userName = user?.displayName || user?.email || "User";
+
+  const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const val = bytes / Math.pow(k, i);
+    return `${val.toFixed(val >= 100 ? 0 : val >= 10 ? 1 : 2)} ${sizes[i]}`;
+  };
+
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
+
+  useEffect(() => {
+    const behavior: ScrollBehavior =
+      prevConvIdRef.current && prevConvIdRef.current === activeConversationId
+        ? "smooth"
+        : "auto";
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    });
+    prevConvIdRef.current = activeConversationId;
+    return () => cancelAnimationFrame(id);
+  }, [activeConversationId, activeConversation?.messages.length, isTyping]);
+
+  useEffect(() => {
+    if (!loading && user?.uid) {
+      const unsub = subscribeUserProfile(user.uid, async (p) => {
+        setProfile(p);
+        try { await resetDailyIfNeeded(user.uid, p?.lastReset); } catch {}
+      });
+      return () => {
+        try { unsub(); } catch {}
+      };
+    }
+  }, [loading, user?.uid]);
+
+  const handleNewChat = () => {
+    const newConversation: Conversation = {
+      id: Date.now().toString(),
+      title: "New conversation",
+      timestamp: new Date(),
+      messages: [],
+    };
+    setConversations([newConversation, ...conversations]);
+    setActiveConversationId(newConversation.id);
+    if (user?.uid) {
+      ensureSession(user.uid, newConversation.id, newConversation.title).catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+    if (conversations.length === 0) {
+      setTimeout(() => {
+        if (conversations.length === 0) handleNewChat();
+      }, 0);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (summaryStreamTimerRef.current !== null) {
+        window.clearInterval(summaryStreamTimerRef.current);
+        summaryStreamTimerRef.current = null;
+      }
+      summaryStreamingRef.current = false;
+    };
+  }, []);
+
+  const handleSelectConversation = (id: string) => {
+    setActiveConversationId(id);
+  };
+
+  const handleDeleteConversation = (id: string) => {
+    try {
+      datasetMetaSubsRef.current[id]?.();
+      delete datasetMetaSubsRef.current[id];
+    } catch {}
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      setActiveConversationId((current) => {
+        if (current === id) {
+          return next.length ? next[0].id : null;
+        }
+        return current;
+      });
+      return next;
+    });
+  };
+
+  const handleCancel = () => {
+    try {
+      abortRef.current?.abort();
+    } catch {}
+    if (summaryStreamTimerRef.current !== null) {
+      window.clearInterval(summaryStreamTimerRef.current);
+      summaryStreamTimerRef.current = null;
+    }
+    summaryStreamingRef.current = false;
+    const pid = placeholderIdRef.current;
+    const cid = activeConversationId;
+    if (pid && cid) {
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== cid) return c;
+          const idx = c.messages.findIndex((m) => m.id === pid);
+          if (idx === -1) return c;
+          const nextMsgs = c.messages.slice();
+          const msg = nextMsgs[idx] as Message;
+          if (msg.role === "assistant") {
+            nextMsgs[idx] = { ...(msg as any), kind: "status", content: "Cancelled." } as Message;
+          }
+          return { ...c, messages: nextMsgs };
+        })
+      );
+    }
+    setIsTyping(false);
+    abortRef.current = null;
+    placeholderIdRef.current = null;
+  };
+
+  const SIGN_URL = ((import.meta as any).env?.VITE_SIGN_URL as string | undefined) || "/api/sign-upload-url";
+  const CHAT_URL = ((import.meta as any).env?.VITE_CHAT_URL as string | undefined) || "/api/chat";
+
+  useEffect(() => {
+    (async () => {
+      if (!loading && user?.uid) {
+        try {
+          const sessions = await getRecentSessionsWithMessages(user.uid, 5);
+          if (sessions.length > 0) {
+            setConversations((prev) => {
+              if (!prev || prev.length === 0) return sessions as any;
+              const prevIds = new Set(prev.map((c) => c.id));
+              const newOnes = sessions.filter((s: any) => !prevIds.has(s.id)) as any;
+              return [...prev, ...newOnes];
+            });
+            setActiveConversationId((prev) => prev ?? sessions[0].id);
+          }
+        } catch (_) {
+          // ignore load errors in UI
+        }
+      }
+    })();
+  }, [loading, user?.uid]);
+
+  const ensureConversation = (): string => {
+    if (!activeConversationId) {
+      const newId = Date.now().toString();
+      const newConversation: Conversation = {
+        id: newId,
+        title: "New conversation",
+        timestamp: new Date(),
+        messages: [],
+      };
+      setConversations((prev) => [newConversation, ...prev]);
+      setActiveConversationId(newId);
+      if (user?.uid) {
+        ensureSession(user.uid, newId, newConversation.title).catch(() => {});
+      }
+      return newId;
+    }
+    return activeConversationId;
+  };
+
+  const handleUploadFile = async (file: File) => {
+    if (!SIGN_URL) {
+      alert("Missing VITE_SIGN_URL env");
+      return;
+    }
+    if (loading || !idToken) {
+      alert("Authenticating... please retry");
+      return;
+    }
+    setUploading(true);
+    try {
+      const convId = ensureConversation();
+      if (!convId) return;
+      const resp = await getSignedUploadUrl({
+        signUrl: SIGN_URL,
+        idToken,
+        sessionId: convId,
+        filename: file.name,
+        size: file.size,
+        type: file.type || "application/octet-stream",
+      });
+      await putToSignedUrl(resp.url, file);
+
+      const uploadMsgId = `${convId}-${Date.now()}-sys`;
+      uploadMsgIdByConvRef.current[convId] = uploadMsgId;
+
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId
+            ? {
+                ...c,
+                datasetId: resp.datasetId,
+                messages: [
+                  ...c.messages,
+                  {
+                    id: uploadMsgId,
+                    role: "assistant",
+                    kind: "text",
+                    content:
+                      "File uploaded and queued for preprocessing. You can now ask a question about your data.",
+                    meta: { fileName: file.name, fileSize: formatBytes(file.size) },
+                    timestamp: new Date(),
+                  } as Message,
+                ],
+              }
+            : c
+        )
+      );
+      if (user?.uid) {
+        updateSessionDataset(user.uid, convId, resp.datasetId).catch(() => {});
+        try {
+          datasetMetaSubsRef.current[convId]?.();
+        } catch {}
+        const unsub = subscribeDatasetMeta(user.uid, convId, resp.datasetId, (meta) => {
+          const r = typeof meta?.rows === "number" ? meta.rows : undefined;
+          const c = typeof meta?.columns === "number" ? meta.columns : undefined;
+          if (r && c) {
+            setConversations((prev) =>
+              prev.map((sess) => {
+                if (sess.id !== convId) return sess;
+                const msgs = sess.messages.slice();
+                const targetId = uploadMsgIdByConvRef.current[convId] || null;
+                let idx = targetId ? msgs.findIndex((m) => m.id === targetId) : -1;
+                if (idx === -1) {
+                  for (let i = msgs.length - 1; i >= 0; i--) {
+                    const m = msgs[i];
+                    if (m.role === "assistant" && m.kind === "text") {
+                      idx = i;
+                      break;
+                    }
+                  }
+                }
+                if (idx >= 0) {
+                  const m = msgs[idx] as Message;
+                  msgs[idx] = {
+                    ...(m as any),
+                    meta: { ...(m as any).meta, rows: r, columns: c },
+                  } as Message;
+                }
+                return { ...sess, messages: msgs };
+              })
+            );
+            try {
+              unsub();
+            } catch {}
+            delete datasetMetaSubsRef.current[convId];
+            uploadMsgIdByConvRef.current[convId] = null;
+          }
+        });
+        datasetMetaSubsRef.current[convId] = unsub;
+      }
+    } catch (e: any) {
+      alert(e?.message || String(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSendMessage = async (content: string) => {
+    const convId = ensureConversation();
+    if (!convId) return;
+    const conv = conversations.find((c) => c.id === convId);
+    if (!conv?.datasetId) {
+      alert("Please upload a dataset first using the paperclip.");
+      return;
+    }
+    if (loading || !idToken) {
+      alert("Authenticating... please retry");
+      return;
+    }
+    if (!CHAT_URL) {
+      alert("Missing VITE_CHAT_URL env");
+      return;
+    }
+    if ((profile?.messagesToday ?? 0) >= (profile?.quota ?? 50)) {
+      alert("Daily quota reached. Please try again tomorrow or upgrade your plan.");
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `${convId}-${Date.now()}`,
+      role: "user",
+      kind: "text",
+      content,
+      timestamp: new Date(),
+    };
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? {
+              ...c,
+              messages: [...c.messages, userMessage],
+              title:
+                c.messages.length === 0
+                  ? content.length > 50
+                    ? content.slice(0, 50) + "..."
+                    : content
+                  : c.title,
+            }
+          : c
+      )
+    );
+    if (user?.uid) {
+      saveUserMessage(user.uid, convId, userMessage.id, content).catch(() => {});
+    }
+
+    const isCodeOnly = /\b(show|view|display|give|print)\b[^\n]*\bcode\b/i.test(content) || /\bcode only\b/i.test(content);
+
+    if (summaryStreamTimerRef.current !== null) {
+      window.clearInterval(summaryStreamTimerRef.current);
+      summaryStreamTimerRef.current = null;
+    }
+    summaryStreamingRef.current = false;
+    setIsTyping(true);
+    codeInsertedByConvRef.current[convId] = false;
+    codeMsgIdByConvRef.current[convId] = null;
+    const ac = new AbortController();
+    abortRef.current = ac;
+    let placeholderId: string | null = null;
+    if (!isCodeOnly) {
+      placeholderId = `${convId}-${Date.now()}-ph`;
+      placeholderIdRef.current = placeholderId;
+      const placeholder: Message = {
+        id: placeholderId,
+        role: "assistant",
+        kind: "status",
+        content: "Analyzing...",
+        timestamp: new Date(),
+      };
+      setConversations((prev) => prev.map((c) => (c.id === convId ? { ...c, messages: [...c.messages, placeholder] } : c)));
+    } else {
+      placeholderIdRef.current = null;
+    }
+
+    const updatePlaceholder = (updater: (m: Extract<Message, { role: "assistant" }>) => Message): boolean => {
+      let updated = false;
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== convId) return c;
+          const idx = c.messages.findIndex((m) => m.id === placeholderId);
+          if (idx === -1) return c;
+          const nextMsgs = c.messages.slice();
+          nextMsgs[idx] = updater(nextMsgs[idx] as Extract<Message, { role: "assistant" }>);
+          updated = true;
+          return { ...c, messages: nextMsgs };
+        })
+      );
+      return updated;
+    };
+
+    try {
+      await streamChat({
+        chatUrl: CHAT_URL,
+        idToken,
+        sessionId: convId,
+        datasetId: conv.datasetId!,
+        question: content,
+        signal: ac.signal,
+        onEvent: (ev: ChatEvent) => {
+          if (isCodeOnly) {
+            if (ev.type === "code") {
+              const existingId = codeMsgIdByConvRef.current[convId] || null;
+              if (existingId) {
+                setConversations((prev) =>
+                  prev.map((c) => {
+                    if (c.id !== convId) return c;
+                    const msgs = c.messages.slice();
+                    const idx = msgs.findIndex((m) => m.id === existingId);
+                    if (idx >= 0) {
+                      const m = msgs[idx] as any;
+                      msgs[idx] = {
+                        ...m,
+                        code: ev.data.text,
+                        language: ev.data.language || "python",
+                        warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                        timestamp: new Date(),
+                      } as any;
+                    }
+                    return { ...c, messages: msgs };
+                  })
+                );
+              } else {
+                const newId = `${convId}-${Date.now()}-code`;
+                codeMsgIdByConvRef.current[convId] = newId;
+                setConversations((prev) =>
+                  prev.map((c) => {
+                    if (c.id !== convId) return c;
+                    const msgs = c.messages.slice();
+                    const codeMsg: Message = {
+                      id: newId,
+                      role: "assistant",
+                      timestamp: new Date(),
+                      kind: "code",
+                      code: ev.data.text,
+                      language: ev.data.language || "python",
+                      warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                    } as any;
+                    msgs.push(codeMsg);
+                    codeInsertedByConvRef.current[convId] = true;
+                    return { ...c, messages: msgs };
+                  })
+                );
+              }
+              setIsTyping(false);
+              try {
+                abortRef.current?.abort();
+              } catch {}
+            }
+            return;
+          }
+
+          if (ev.type === "validating") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Validating input..." }));
+          else if (ev.type === "generating_code") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Generating analysis code..." }));
+          else if (ev.type === "code") {
+            const existingId = codeMsgIdByConvRef.current[convId] || null;
+            if (existingId) {
+              setConversations((prev) =>
+                prev.map((c) => {
+                  if (c.id !== convId) return c;
+                  const msgs = c.messages.slice();
+                  const idx = msgs.findIndex((m) => m.id === existingId);
+                  if (idx >= 0) {
+                    const m = msgs[idx] as any;
+                    msgs[idx] = {
+                      ...m,
+                      code: ev.data.text,
+                      language: ev.data.language || "python",
+                      warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                      timestamp: new Date(),
+                    } as any;
+                  }
+                  return { ...c, messages: msgs };
+                })
+              );
+            } else {
+              const newId = `${convId}-${Date.now()}-code`;
+              codeMsgIdByConvRef.current[convId] = newId;
+              setConversations((prev) =>
+                prev.map((c) => {
+                  if (c.id !== convId) return c;
+                  const msgs = c.messages.slice();
+                  const phIdx = msgs.findIndex((m) => m.id === placeholderIdRef.current);
+                  const codeMsg: Message = {
+                    id: newId,
+                    role: "assistant",
+                    timestamp: new Date(),
+                    kind: "code",
+                    code: ev.data.text,
+                    language: ev.data.language || "python",
+                    warnings: Array.isArray(ev.data.warnings) ? ev.data.warnings : undefined,
+                  } as any;
+                  if (phIdx >= 0) {
+                    msgs.splice(phIdx, 0, codeMsg);
+                  } else {
+                    msgs.push(codeMsg);
+                  }
+                  codeInsertedByConvRef.current[convId] = true;
+                  return { ...c, messages: msgs };
+                })
+              );
+            }
+          } else if (ev.type === "repairing") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Repairing and retrying analysis..." }));
+          else if (ev.type === "running_fast") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Running analysis..." }));
+          else if (ev.type === "summarizing") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Summarizing results..." }));
+          else if (ev.type === "persisting") updatePlaceholder((m) => ({ ...m, kind: "status", content: "Saving results..." }));
+          else if (ev.type === "error") {
+            updatePlaceholder((m) => ({ ...m, kind: "error", content: `Error: ${ev.data.message}` }));
+            if (summaryStreamTimerRef.current !== null) {
+              window.clearInterval(summaryStreamTimerRef.current);
+              summaryStreamTimerRef.current = null;
+            }
+            summaryStreamingRef.current = false;
+            setIsTyping(false);
+          } else if (ev.type === "done") {
+            const summaryText =
+              typeof ev.data.summary === "string" && ev.data.summary.trim().length > 0
+                ? ev.data.summary
+                : "Analysis complete.";
+
+            // Stash table and chart for staged reveal
+            const rows = Array.isArray(ev.data.tableSample) ? ev.data.tableSample : [];
+            const chartData = ev.data.chartData || null;
+
+            const hasChartData = (cd: any): boolean => {
+              try {
+                const labels = cd?.labels;
+                const series = cd?.series;
+                if (!Array.isArray(labels) || labels.length === 0) return false;
+                if (!Array.isArray(series) || series.length === 0) return false;
+                return series.some((s: any) => Array.isArray(s?.data) && s.data.some((x: any) => typeof x === "number"));
+              } catch {
+                return false;
+              }
+            };
+
+            if (summaryStreamTimerRef.current !== null) {
+              window.clearInterval(summaryStreamTimerRef.current);
+              summaryStreamTimerRef.current = null;
+            }
+
+            // Convert placeholder to text and stream words
+            const placeholderReady = updatePlaceholder((m) => ({ ...m, kind: "text", content: "" }));
+            if (placeholderReady) {
+              summaryStreamingRef.current = true;
+              const tokens = summaryText.split(/(\s+)/); // keep whitespace tokens
+              let idx = 0;
+              let wordsCounted = 0;
+              let wordsTarget = 2; // alternate 2 and 3 words per tick
+
+              const step = () => {
+                let addedWordTokens = 0;
+                while (idx < tokens.length && addedWordTokens < wordsTarget) {
+                  const t = tokens[idx++];
+                  if (t && /\S/.test(t)) {
+                    addedWordTokens++;
+                  }
+                }
+                // Include trailing whitespace after the last word added
+                while (idx < tokens.length && tokens[idx] && !/\S/.test(tokens[idx])) {
+                  // attach whitespace directly after the word bundle
+                  idx++;
+                }
+
+                const nextText = tokens.slice(0, idx).join("");
+                updatePlaceholder((m) => ({ ...m, kind: "text", content: nextText }));
+                bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+
+                // alternate 2 and 3
+                wordsCounted++;
+                wordsTarget = wordsTarget === 2 ? 3 : 2;
+
+                if (idx >= tokens.length) {
+                  if (summaryStreamTimerRef.current !== null) {
+                    window.clearInterval(summaryStreamTimerRef.current);
+                    summaryStreamTimerRef.current = null;
+                  }
+                  summaryStreamingRef.current = false;
+                  setIsTyping(false);
+
+                  // Reveal table (if any), then chart after a short delay
+                  if (rows && rows.length > 0) {
+                    setConversations((prev) =>
+                      prev.map((c) =>
+                        c.id === convId
+                          ? {
+                              ...c,
+                              messages: [
+                                ...c.messages,
+                                { id: `${convId}-${Date.now()}-table`, role: "assistant", timestamp: new Date(), kind: "table", rows },
+                              ],
+                            }
+                          : c
+                      )
+                    );
+                  }
+                  if (chartData && hasChartData(chartData)) {
+                    window.setTimeout(() => {
+                      setConversations((prev) =>
+                        prev.map((c) =>
+                          c.id === convId
+                            ? {
+                                ...c,
+                                messages: [
+                                  ...c.messages,
+                                  { id: `${convId}-${Date.now()}-chart`, role: "assistant", timestamp: new Date(), kind: "chart", chartData },
+                                ],
+                              }
+                            : c
+                        )
+                      );
+                    }, 275);
+                  }
+                }
+              };
+              step();
+              if (idx < tokens.length) {
+                summaryStreamTimerRef.current = window.setInterval(step, 80);
+              } else {
+                summaryStreamingRef.current = false;
+                setIsTyping(false);
+              }
+            } else {
+              // Fallback: no placeholder present; set full text immediately and then reveal others
+              summaryStreamingRef.current = false;
+              updatePlaceholder((m) => ({ ...m, kind: "text", content: summaryText }));
+              setIsTyping(false);
+              if (rows && rows.length > 0) {
+                setConversations((prev) =>
+                  prev.map((c) =>
+                    c.id === convId
+                      ? {
+                          ...c,
+                          messages: [
+                            ...c.messages,
+                            { id: `${convId}-${Date.now()}-table`, role: "assistant", timestamp: new Date(), kind: "table", rows },
+                          ],
+                        }
+                      : c
+                  )
+                );
+              }
+              if (chartData && hasChartData(chartData)) {
+                window.setTimeout(() => {
+                  setConversations((prev) =>
+                    prev.map((c) =>
+                      c.id === convId
+                        ? {
+                            ...c,
+                            messages: [
+                              ...c.messages,
+                              { id: `${convId}-${Date.now()}-chart`, role: "assistant", timestamp: new Date(), kind: "chart", chartData },
+                            ],
+                          }
+                        : c
+                    )
+                  );
+                }, 275);
+              }
+            }
+
+            if (user?.uid) {
+              // Persist assistant summary message and increment usage
+              saveAssistantMessage(user.uid, convId, `${convId}-${Date.now()}-asst`, summaryText).catch(() => {});
+              incrementDailyUsage(user.uid).catch(() => {});
+            }
+          }
+        },
+      });
+    } catch (e: any) {
+      if (summaryStreamTimerRef.current !== null) {
+        window.clearInterval(summaryStreamTimerRef.current);
+        summaryStreamTimerRef.current = null;
+      }
+      summaryStreamingRef.current = false;
+      updatePlaceholder((m) => ({ ...m, kind: "error", content: `Connection error: ${e?.message || "stream interrupted"}` }));
+      setIsTyping(false);
+    } finally {
+      abortRef.current = null;
+      if (!summaryStreamingRef.current) {
+        setIsTyping(false);
+      }
+    }
+  };
+
+  return (
+    <div className="size-full flex bg-background">
+      <ChatHeader sidebarOpen={sidebarOpen} />
+
+      <ChatSidebar
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewChat={handleNewChat}
+        onDeleteConversation={handleDeleteConversation}
+        userName={userName}
+        userPlan={profile?.plan || "Free"}
+        dailyLimit={dailyLimit}
+        dailyUsed={dailyUsed}
+        onSignOut={typeof signOut === 'function' ? () => signOut() : undefined}
+      />
+
+      <main
+        className="flex-1 flex flex-col h-full transition-all duration-300 pt-14"
+        style={{
+          marginLeft: sidebarOpen ? "256px" : "64px",
+        }}
+      >
+        <ScrollArea ref={scrollRef} className="flex-1">
+          {activeConversation && activeConversation.messages.length > 0 ? (
+            <div className="pb-32">
+              {activeConversation.messages.map((message) => (
+                <React.Fragment key={message.id}>
+                  <ChatMessage
+                    message={message}
+                    userName={userName}
+                    showCursor={
+                      Boolean(
+                        summaryStreamingRef.current &&
+                        isTyping &&
+                        message.role === "assistant" &&
+                        message.kind === "text" &&
+                        message.id === placeholderIdRef.current
+                      )
+                    }
+                    showCancel={
+                      isTyping &&
+                      message.role === "assistant" &&
+                      message.kind === "status" &&
+                      message.id === placeholderIdRef.current
+                    }
+                    onCancel={handleCancel}
+                  />
+                </React.Fragment>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          ) : (
+            <div className="h-full flex items-center justify-center p-8 pb-32">
+              <div className="text-center max-w-md">
+                <h2 className="mb-4">Start a new conversation</h2>
+                <p className="text-muted-foreground">
+                  Ask me anything! I'm here to help answer your questions and have a conversation.
+                </p>
+              </div>
+            </div>
+          )}
+        </ScrollArea>
+      </main>
+
+      <div
+        className="transition-all duration-300"
+        style={{
+          marginLeft: sidebarOpen ? "256px" : "64px",
+        }}
+      >
+        <ChatInput onSendMessage={handleSendMessage} onUploadFile={handleUploadFile} disabled={isTyping || uploading} />
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="pages/LandingPage.tsx">
+import React, { useEffect } from "react";
+import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
+import { Zap, Shield, Sparkles } from "lucide-react";
+import AuthBox from "../components/AuthBox";
+import { Card, CardContent } from "../components/ui/card";
+
+export default function LandingPage() {
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user && !user.isAnonymous) navigate("/chat", { replace: true });
+  }, [loading, user, navigate]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div>Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-[calc(var(--vh,1vh)*100)] bg-gradient-to-br from-background to-muted relative overflow-x-hidden flex items-center">
+      <svg className="absolute inset-0 w-full h-full" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path
+              d="M 40 0 L 0 0 0 40"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="0.5"
+              className="text-muted-foreground/20"
+            />
+          </pattern>
+          <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="1" className="fill-muted-foreground/20" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)" />
+        <rect width="100%" height="100%" fill="url(#dots)" />
+
+        <g className="text-muted-foreground/20" stroke="currentColor" strokeWidth="1.5" fill="none">
+          <path
+            d="M 100 200 Q 250 100 400 200 T 700 200"
+            className="animate-pulse"
+            style={{ animationDuration: "8s" }}
+          />
+          <path
+            d="M 200 400 Q 350 300 500 400 T 800 400"
+            className="animate-pulse"
+            style={{ animationDuration: "10s", animationDelay: "1s" }}
+          />
+          <path
+            d="M 150 600 Q 300 500 450 600 T 750 600"
+            className="animate-pulse"
+            style={{ animationDuration: "12s", animationDelay: "2s" }}
+          />
+        </g>
+      </svg>
+
+      <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 relative z-10 w-full">
+        <div className="grid lg:grid-cols-2 gap-6 sm:gap-8 lg:gap-12 items-start lg:items-end max-w-7xl mx-auto">
+          <div className="space-y-6 sm:space-y-8">
+            <div className="space-y-3 sm:space-y-4">
+
+              <h1 className="text-indigo-400 text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold tracking-tight">
+                Your AI Data Analyst
+              </h1>
+              <p className="text-sm sm:text-base lg:text-lg text-muted-foreground leading-relaxed max-w-xl">
+                Transform your data into actionable insights with the power of artificial intelligence. Ask questions
+                in natural language and get instant answers.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:gap-4">
+              <Card className="shadow-sm border-border/60">
+                <CardContent className="pt-4 sm:pt-6">
+                  <div className="flex gap-3 sm:gap-4">
+                    <div className="flex-shrink-0">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                        <Zap className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600 dark:text-blue-400" />
+                      </div>
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <h3 className="text-slate-500 font-semibold text-sm sm:text-base">
+                        Get instant insights from your data
+                      </h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
+                        Upload your files and start asking questions. Our AI understands your data and provides clear,
+                        accurate answers in seconds.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm border-border/60">
+                <CardContent className="pt-4 sm:pt-6">
+                  <div className="flex gap-3 sm:gap-4">
+                    <div className="flex-shrink-0">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                        <Shield className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 dark:text-green-400" />
+                      </div>
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <h3 className="text-slate-500 font-semibold text-sm sm:text-base">Privacy focused</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
+                        Your files and data are automatically deleted after 1 day. We prioritize your privacy and security
+                        above all else.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm border-border/60">
+                <CardContent className="pt-4 sm:pt-6">
+                  <div className="flex gap-3 sm:gap-4">
+                    <div className="flex-shrink-0">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
+                        <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-purple-600 dark:text-purple-400" />
+                      </div>
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <h3 className="text-slate-500 font-semibold text-sm sm:text-base">Powered by Gemini AI</h3>
+                      <p className="text-xs sm:text-sm text-muted-foreground">
+                        Leveraging cutting-edge AI technology for intelligent, context-aware data analysis.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          <div className="flex justify-center lg:justify-end">
+            <div className="w-full max-w-md">
+              <AuthBox
+                showContinueAsGuest={Boolean(user?.isAnonymous)}
+                onContinueAsGuest={() => navigate("/chat")}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="services/api.ts">
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+
+export interface SignedUrlResponse {
+  url: string;
+  datasetId: string;
+  storagePath: string;
+}
+
+export type ChatEvent =
+  | { type: "ping"; ts: string }
+  | { type: "received"; data: { sessionId: string; datasetId: string } }
+  | { type: "validating" }
+  | { type: "generating_code" }
+  | { type: "code"; data: { language: "python"; text: string; warnings?: string[] } }
+  | { type: "repairing" }
+  | { type: "running_fast" }
+  | { type: "summarizing" }
+  | { type: "persisting" }
+  | { type: "error"; data: { code: string; message: string } }
+  | {
+      type: "done";
+      data: {
+        messageId: string;
+        chartData?: any;
+        tableSample?: any[];
+        uris?: Record<string, string>;
+        urisGs?: Record<string, string>;
+        summary?: string;
+      };
+    };
+
+export async function getSignedUploadUrl(params: {
+  signUrl: string;
+  idToken: string;
+  sessionId: string;
+  filename: string;
+  size: number;
+  type: string;
+}): Promise<SignedUrlResponse> {
+  // Use URLSearchParams to safely build the query string.
+  const query = new URLSearchParams({
+    sessionId: params.sessionId,
+    filename: params.filename,
+    size: params.size.toString(),
+    type: params.type,
+  });
+
+  // Append the query string to the base URL. This works for both
+  // absolute URLs (like http://localhost...) and relative ones (/api/...).
+  const fullUrl = `${params.signUrl}?${query.toString()}`;
+
+  const res = await fetch(fullUrl, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${params.idToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`sign-upload-url failed ${res.status}: ${txt}`);
+  }
+  return (await res.json()) as SignedUrlResponse;
+}
+
+export async function putToSignedUrl(url: string, file: File) {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`PUT upload failed ${res.status}: ${txt}`);
+  }
+}
+
+export async function streamChat(params: {
+  chatUrl: string;
+  idToken: string;
+  sessionId: string;
+  datasetId: string;
+  question: string;
+  signal?: AbortSignal;
+  onEvent: (ev: ChatEvent) => void;
+}) {
+  const { chatUrl, idToken, sessionId, datasetId, question, signal, onEvent } =
+    params;
+
+  await fetchEventSource(chatUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ sessionId, datasetId, question }),
+    signal,
+    onmessage(msg) {
+      if (!msg.data) return;
+      try {
+        const obj = JSON.parse(msg.data) as ChatEvent;
+        onEvent(obj);
+      } catch (_) {
+        // ignore parse errors
+      }
+    },
+    onerror(err) {
+      throw err;
+    },
+    openWhenHidden: true,
+  });
+}
+</file>
+
+<file path="services/firestore.ts">
+import { db } from "../lib/firebase";
+import {
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  getDocs,
+  orderBy,
+  limit as qlimit,
+  query,
+  onSnapshot,
+  getDoc,
+  increment,
+} from "firebase/firestore";
+import type { Message } from "../components/ChatMessage";
+
+export async function ensureSession(uid: string, sid: string, title: string) {
+  const ref = doc(collection(db, "users", uid, "sessions"), sid);
+  const now = new Date();
+  await setDoc(
+    ref,
+    { title, createdAt: now, updatedAt: now },
+    { merge: true }
+  );
+}
+
+export function subscribeDatasetMeta(
+  uid: string,
+  sid: string,
+  datasetId: string,
+  cb: (meta: { rows?: number; columns?: number }) => void
+): () => void {
+  const ref = doc(collection(db, "users", uid, "sessions", sid, "datasets"), datasetId);
+  const unsub = onSnapshot(ref, (snap) => {
+    const d = (snap.data() as any) || {};
+    cb({ rows: d?.rows, columns: d?.columns });
+  });
+  return unsub;
+}
+
+export async function updateSessionDataset(uid: string, sid: string, datasetId: string) {
+  const ref = doc(collection(db, "users", uid, "sessions"), sid);
+  const now = new Date();
+  await updateDoc(ref, { datasetId, updatedAt: now });
+}
+
+export async function saveUserMessage(uid: string, sid: string, messageId: string, content: string) {
+  const msgRef = doc(collection(db, "users", uid, "sessions", sid, "messages"), messageId);
+  const now = new Date();
+  await setDoc(msgRef, { role: "user", content, createdAt: now }, { merge: true });
+}
+
+export async function saveAssistantMessage(uid: string, sid: string, messageId: string, content: string) {
+  const msgRef = doc(collection(db, "users", uid, "sessions", sid, "messages"), messageId);
+  const now = new Date();
+  await setDoc(msgRef, { role: "assistant", content, createdAt: now }, { merge: true });
+}
+
+function toDate(x: any): Date {
+  // Firestore Timestamp compatibility
+  if (x && typeof x.toDate === "function") return x.toDate();
+  if (typeof x === "string" || typeof x === "number") return new Date(x);
+  return new Date();
+}
+
+export interface ConversationLoaded {
+  id: string;
+  title: string;
+  timestamp: Date;
+  messages: Message[];
+  datasetId?: string;
+}
+
+export async function getRecentSessionsWithMessages(uid: string, take: number): Promise<ConversationLoaded[]> {
+  const sessCol = collection(db, "users", uid, "sessions");
+  const q = query(sessCol, orderBy("updatedAt", "desc"), qlimit(take));
+  const snap = await getDocs(q);
+
+  const convs: ConversationLoaded[] = [];
+  for (const s of snap.docs) {
+    const sd = s.data() as any;
+    const sessId = s.id;
+    const title = sd?.title || "Untitled";
+    const datasetId = sd?.datasetId as string | undefined;
+    const timestamp = toDate(sd?.updatedAt || sd?.createdAt);
+
+    // Load messages (ascending)
+    const msgCol = collection(db, "users", uid, "sessions", sessId, "messages");
+    const mQ = query(msgCol, orderBy("createdAt", "asc"), qlimit(200));
+    const mSnap = await getDocs(mQ);
+    const messages: Message[] = [];
+    for (const m of mSnap.docs) {
+      const md = m.data() as any;
+      const role = (md?.role === "assistant" ? "assistant" : "user") as "assistant" | "user";
+      const content = typeof md?.content === "string" ? md.content : "";
+      messages.push({ id: m.id, role, kind: "text", content, timestamp: toDate(md?.createdAt) });
+    }
+
+    convs.push({ id: sessId, title, timestamp, messages, datasetId });
+  }
+  return convs;
+}
+
+export async function ensureUserProfile(
+  uid: string,
+  seed: Partial<{ email: string; displayName: string; plan: string; quota: number; messagesToday: number; lastReset: Date; createdAt: Date }>
+) {
+  const userRef = doc(collection(db, "users"), uid);
+  const snap = await getDoc(userRef);
+  const now = new Date();
+  if (!snap.exists()) {
+    const plan = seed.plan ?? "Free";
+    const quota = typeof seed.quota === "number" ? seed.quota : 50;
+    await setDoc(userRef, {
+      email: seed.email ?? "",
+      displayName: seed.displayName ?? "",
+      plan,
+      quota,
+      messagesToday: typeof seed.messagesToday === "number" ? seed.messagesToday : 0,
+      lastReset: seed.lastReset ?? now,
+      createdAt: seed.createdAt ?? now,
+      updatedAt: now,
+    });
+  } else {
+    await updateDoc(userRef, { updatedAt: now });
+  }
+}
+
+export function subscribeUserProfile(uid: string, cb: (p: { displayName?: string; email?: string; plan?: string; quota?: number; messagesToday?: number; lastReset?: any }) => void) {
+  const ref = doc(collection(db, "users"), uid);
+  const unsub = onSnapshot(ref, (snap) => {
+    cb((snap.data() as any) || {});
+  });
+  return unsub;
+}
+
+export async function incrementDailyUsage(uid: string) {
+  const userRef = doc(collection(db, "users"), uid);
+  await updateDoc(userRef, { messagesToday: increment(1), updatedAt: new Date() });
+}
+
+export async function resetDailyIfNeeded(uid: string, lastReset: any) {
+  const toDate = (x: any): Date => {
+    if (x && typeof x.toDate === "function") return x.toDate();
+    if (typeof x === "string" || typeof x === "number") return new Date(x);
+    return x instanceof Date ? x : new Date(0);
+  };
+  const prev = toDate(lastReset);
+  const now = new Date();
+  const isSameDay = (a: Date, b: Date) => a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
+  if (!isSameDay(prev, now)) {
+    const userRef = doc(collection(db, "users"), uid);
+    await updateDoc(userRef, { messagesToday: 0, lastReset: now, updatedAt: now });
+  }
+}
+</file>
+
+<file path="styles/globals.css">
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+  --background: #ffffff;
+  --foreground: oklch(0.145 0 0);
+  --card: #ffffff;
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: #030213;
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.95 0.0058 264.53);
+  --secondary-foreground: #030213;
+  --muted: #ececf0;
+  --muted-foreground: #717182;
+  --accent: #e9ebef;
+  --accent-foreground: #030213;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.1);
+  --input: transparent;
+  --input-background: #f3f3f5;
+  --switch-background: #cbced4;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: #030213;
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Custom Scrollbar Styles - Minimal & Subtle */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  .dark * {
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.3);
+  }
+
+  .dark *::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .dark *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+  }
+}
+
+/**
+ * Base typography. This is not applied to elements which have an ancestor with a Tailwind text class.
+ */
+@layer base {
+  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) {
+    h1 {
+      font-size: var(--text-2xl);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    h2 {
+      font-size: var(--text-xl);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    h3 {
+      font-size: var(--text-lg);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    h4 {
+      font-size: var(--text-base);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    p {
+      font-size: var(--text-base);
+      font-weight: var(--font-weight-normal);
+      line-height: 1.5;
+    }
+
+    label {
+      font-size: var(--text-base);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    button {
+      font-size: var(--text-base);
+      font-weight: var(--font-weight-medium);
+      line-height: 1.5;
+    }
+
+    input {
+      font-size: var(--text-base);
+      font-weight: var(--font-weight-normal);
+      line-height: 1.5;
+    }
+  }
+}
+
+html {
+  font-size: var(--font-size);
+}
+</file>
+
+<file path="styles/tailwind.css">
+@import "tailwindcss";
+/* Project design tokens and custom layers */
+@import "./globals.css";
+
+/* Tell Tailwind v4 where to scan for class usage */
+@source "../../index.html";
+@source "../**/*.{js,jsx,ts,tsx}";
+</file>
+
+</files>

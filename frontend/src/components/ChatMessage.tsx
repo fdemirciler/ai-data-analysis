@@ -1,6 +1,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Highlight, themes } from "prism-react-renderer";
 import { cn } from "./ui/utils";
 import { Bot, Copy as CopyIcon } from "lucide-react";
 import { TableRenderer } from "./renderers/TableRenderer";
@@ -83,18 +84,6 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
   }, [message.timestamp]);
   // no-op state for now
 
-  const normalizedText = React.useMemo(() => {
-    if (message.kind !== "text") return "";
-    try {
-      const raw = (message as any).content || "";
-      const unix = String(raw).replace(/\r\n/g, "\n");
-      // Convert single newlines between non-empty lines into double newlines so Markdown renders paragraphs
-      return unix.replace(/(^|[^\n])\n(?!\n)/g, "$1\n\n");
-    } catch {
-      return (message as any).content || "";
-    }
-  }, [message]);
-
   return (
     <div className="w-full py-8 px-4">
       <div className={cn("max-w-3xl mx-auto flex gap-6")}>
@@ -112,9 +101,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
         </div>
 
         {/* Message Content */}
-        <div className="flex-1 space-y-4 pt-1">
+        <div className="flex-1 min-w-0 space-y-4 pt-1">
           {message.kind === "text" && (
-            <div className="prose dark:prose-invert max-w-none leading-relaxed break-words text-left">
+            <div className="prose dark:prose-invert max-w-full leading-relaxed break-words text-left prose-p:my-4">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -123,7 +112,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
                   ),
                 }}
               >
-                {normalizedText}
+                {message.content || ""}
               </ReactMarkdown>
               {showCursor && (
                 <span className="inline-block w-2 h-4 bg-muted-foreground animate-blink ml-1 rounded-sm" />
@@ -163,9 +152,23 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
                 <summary className="cursor-pointer select-none font-medium">View generated Python script</summary>
                 <div className="mt-3 space-y-3">
                   <div className="relative group">
-                    <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-sm">
-                      <code className="whitespace-pre-wrap">{message.code}</code>
-                    </pre>
+                    <Highlight
+                      code={message.code}
+                      language={(message.language || "python") as any}
+                      theme={themes.nightOwl as any}
+                    >
+                      {({ className, style, tokens, getLineProps, getTokenProps }) => (
+                        <pre className={`w-full max-w-full overflow-x-auto rounded-lg p-3 text-sm ${className}`} style={style}>
+                          {tokens.map((line, i) => (
+                            <div key={i} {...getLineProps({ line, key: i })}>
+                              {line.map((token, key) => (
+                                <span key={key} {...getTokenProps({ token, key })} />
+                              ))}
+                            </div>
+                          ))}
+                        </pre>
+                      )}
+                    </Highlight>
                     <Button
                       type="button"
                       variant="outline"

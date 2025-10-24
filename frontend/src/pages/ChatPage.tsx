@@ -15,8 +15,11 @@ import {
   incrementDailyUsage,
   saveAssistantMessage,
   resetDailyIfNeeded,
+  updateSessionTitle,
+  subscribeRecentSessionTitles,
 } from "../services/firestore";
 import { getSignedUploadUrl, putToSignedUrl, streamChat, type ChatEvent } from "../services/api";
+import { generateTitleLocal } from "../utils/generateTitle";
 
 interface Conversation {
   id: string;
@@ -35,6 +38,7 @@ interface UserProfile {
 }
 
 export default function ChatPage() {
+  const RECENT_TAKE = 10;
   const { idToken, loading, user, signOut } = useAuth() as any;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -54,6 +58,7 @@ export default function ChatPage() {
   const summaryStreamTimerRef = useRef<number | null>(null);
   const summaryStreamingRef = useRef<boolean>(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const titleLockedRef = useRef<Record<string, boolean>>({});
 
   const dailyLimit = profile?.quota ?? 50;
   const dailyUsed = profile?.messagesToday ?? 0;
@@ -101,22 +106,14 @@ export default function ChatPage() {
       timestamp: new Date(),
       messages: [],
     };
-    setConversations([newConversation, ...conversations]);
+    setConversations((prev) => [newConversation, ...prev].slice(0, RECENT_TAKE));
     setActiveConversationId(newConversation.id);
     if (user?.uid) {
       ensureSession(user.uid, newConversation.id, newConversation.title).catch(() => {});
     }
   };
 
-  useEffect(() => {
-    if (didInitRef.current) return;
-    didInitRef.current = true;
-    if (conversations.length === 0) {
-      setTimeout(() => {
-        if (conversations.length === 0) handleNewChat();
-      }, 0);
-    }
-  }, []);
+  // Removed auto-creation of a placeholder session on mount.
 
   useEffect(() => {
     return () => {
@@ -187,13 +184,15 @@ export default function ChatPage() {
     (async () => {
       if (!loading && user?.uid) {
         try {
-          const sessions = await getRecentSessionsWithMessages(user.uid, 5);
+          const sessions = await getRecentSessionsWithMessages(user.uid, RECENT_TAKE);
           if (sessions.length > 0) {
             setConversations((prev) => {
               if (!prev || prev.length === 0) return sessions as any;
               const prevIds = new Set(prev.map((c) => c.id));
               const newOnes = sessions.filter((s: any) => !prevIds.has(s.id)) as any;
-              return [...prev, ...newOnes];
+              const merged = [...prev, ...newOnes];
+              merged.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+              return merged.slice(0, RECENT_TAKE);
             });
             setActiveConversationId((prev) => prev ?? sessions[0].id);
           }
@@ -202,6 +201,36 @@ export default function ChatPage() {
         }
       }
     })();
+  }, [loading, user?.uid]);
+
+  // Subscribe to recent session titles to keep sidebar in sync as single source of truth
+  useEffect(() => {
+    if (!loading && user?.uid) {
+      try {
+        const unsub = subscribeRecentSessionTitles(user.uid, RECENT_TAKE, (items) => {
+          setConversations((prev) => {
+            const map = new Map<string, Conversation>(prev.map((c) => [c.id, { ...c }]));
+            let changed = false;
+            for (const s of items) {
+              const existing = map.get(s.id);
+              if (existing) {
+                if (existing.title !== s.title || existing.timestamp.getTime() !== s.updatedAt.getTime()) {
+                  map.set(s.id, { ...existing, title: s.title, timestamp: s.updatedAt, datasetId: s.datasetId ?? existing.datasetId });
+                  changed = true;
+                }
+              } else {
+                map.set(s.id, { id: s.id, title: s.title, timestamp: s.updatedAt, messages: [], datasetId: s.datasetId });
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            const next = Array.from(map.values()).sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+            return next.slice(0, RECENT_TAKE);
+          });
+        });
+        return () => { try { unsub(); } catch {} };
+      } catch {}
+    }
   }, [loading, user?.uid]);
 
   const ensureConversation = (): string => {
@@ -213,7 +242,7 @@ export default function ChatPage() {
         timestamp: new Date(),
         messages: [],
       };
-      setConversations((prev) => [newConversation, ...prev]);
+      setConversations((prev) => [newConversation, ...prev].slice(0, RECENT_TAKE));
       setActiveConversationId(newId);
       if (user?.uid) {
         ensureSession(user.uid, newId, newConversation.title).catch(() => {});
@@ -688,6 +717,26 @@ export default function ChatPage() {
               saveAssistantMessage(user.uid, convId, `${convId}-${Date.now()}-asst`, summaryText).catch(() => {});
               incrementDailyUsage(user.uid).catch(() => {});
             }
+
+            // Rename conversation once after first assistant reply if title is default or first-message truncated
+            try {
+              const convCurrent = conversations.find((c) => c.id === convId);
+              const currentTitle = convCurrent?.title || "";
+              const firstUserMsg = (convCurrent?.messages || []).find((m) => m.role === "user" && m.kind === "text") as any;
+              const firstText = typeof firstUserMsg?.content === "string" ? firstUserMsg.content : content;
+              const truncated = firstText ? (firstText.length > 50 ? firstText.slice(0, 50) + "..." : firstText) : "";
+              const isDefault = currentTitle === "New conversation" || currentTitle === "New Conversation";
+              const isTruncated = truncated && currentTitle === truncated;
+              const renameAllowed = (isDefault || isTruncated) && !titleLockedRef.current[convId];
+              if (renameAllowed) {
+                const serverTitle = (ev.data as any)?.title;
+                const nextTitle = typeof serverTitle === "string" && serverTitle.trim() ? serverTitle.trim() : generateTitleLocal(firstText, summaryText);
+                if (nextTitle && user?.uid) {
+                  titleLockedRef.current[convId] = true;
+                  updateSessionTitle(user.uid, convId, nextTitle).catch(() => {});
+                }
+              }
+            } catch {}
           }
         },
       });

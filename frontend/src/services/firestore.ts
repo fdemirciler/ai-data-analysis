@@ -44,6 +44,12 @@ export async function updateSessionDataset(uid: string, sid: string, datasetId: 
   await updateDoc(ref, { datasetId, updatedAt: now });
 }
 
+export async function updateSessionTitle(uid: string, sid: string, title: string) {
+  const ref = doc(collection(db, "users", uid, "sessions"), sid);
+  const now = new Date();
+  await updateDoc(ref, { title, updatedAt: now });
+}
+
 export async function saveUserMessage(uid: string, sid: string, messageId: string, content: string) {
   const msgRef = doc(collection(db, "users", uid, "sessions", sid, "messages"), messageId);
   const now = new Date();
@@ -99,6 +105,25 @@ export async function getRecentSessionsWithMessages(uid: string, take: number): 
     convs.push({ id: sessId, title, timestamp, messages, datasetId });
   }
   return convs;
+}
+
+export function subscribeRecentSessionTitles(
+  uid: string,
+  take: number,
+  cb: (sessions: { id: string; title: string; updatedAt: Date; datasetId?: string }[]) => void
+): () => void {
+  const sessCol = collection(db, "users", uid, "sessions");
+  const qy = query(sessCol, orderBy("updatedAt", "desc"), qlimit(take));
+  const unsub = onSnapshot(qy, (snap) => {
+    const items: { id: string; title: string; updatedAt: Date; datasetId?: string }[] = [];
+    for (const s of snap.docs) {
+      const d = s.data() as any;
+      const updatedAt = toDate(d?.updatedAt || d?.createdAt);
+      items.push({ id: s.id, title: d?.title || "New conversation", updatedAt, datasetId: d?.datasetId });
+    }
+    cb(items);
+  });
+  return unsub;
 }
 
 export async function ensureUserProfile(

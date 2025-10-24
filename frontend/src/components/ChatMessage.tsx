@@ -159,13 +159,17 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, userName, sho
                     >
                       {({ className, style, tokens, getLineProps, getTokenProps }) => (
                         <pre className={`w-full max-w-full overflow-x-auto rounded-lg p-3 text-sm ${className}`} style={style}>
-                          {tokens.map((line, i) => (
-                            <div key={i} {...getLineProps({ line, key: i })}>
-                              {line.map((token, key) => (
-                                <span key={key} {...getTokenProps({ token, key })} />
-                              ))}
-                            </div>
-                          ))}
+                          {tokens.map((line, i) => {
+                            const lineProps = getLineProps({ line });
+                            return (
+                              <div key={i} {...lineProps}>
+                                {line.map((token, j) => {
+                                  const tokenProps = getTokenProps({ token });
+                                  return <span key={j} {...tokenProps} />;
+                                })}
+                              </div>
+                            );
+                          })}
                         </pre>
                       )}
                     </Highlight>

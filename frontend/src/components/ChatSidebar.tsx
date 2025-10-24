@@ -93,7 +93,7 @@ export function ChatSidebar({
                   >
                     <button
                       onClick={() => onSelectConversation(conversation.id)}
-                      className="truncate flex-1 text-sm text-left pl-4"
+                      className="truncate flex-1 text-sm text-left pl-4 cursor-pointer"
                     >
                       {conversation.title}
                     </button>

@@ -88,6 +88,104 @@ def generate_analysis_code(
 
 
 # ---------------------------------------------------------------------------
+# Generate Short Chat Title
+# ---------------------------------------------------------------------------
+
+def _sanitize_title(raw: str, max_len: int = 60) -> str:
+    """Sanitize and normalize a model-produced title to sentence case.
+
+    Rules applied here regardless of model output:
+    - Remove surrounding quotes/backticks and emojis/symbols (keep ()-:/& and dots in numbers)
+    - Collapse whitespace
+    - Lowercase everything, then capitalize first letter only (sentence case)
+    - Normalize ' vs ' to lowercase 'vs'
+    - Strip trailing punctuation (.,;:!?)
+    - Truncate to max_len
+    """
+    if not isinstance(raw, str):
+        return ""
+    s = raw.strip()
+    # Strip surrounding quotes/backticks
+    if (s.startswith("\"") and s.endswith("\"")) or (s.startswith("'") and s.endswith("'")) or (s.startswith("`") and s.endswith("`")):
+        s = s[1:-1].strip()
+    # Remove most emojis/symbols by keeping a conservative set
+    s = re.sub(r"[^\w\s()\-:./&]", "", s)
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return ""
+    # Lowercase baseline
+    s = s.lower()
+    # Normalize ' vs '
+    s = re.sub(r"\bvs\b", "vs", s, flags=re.IGNORECASE)
+    # Strip trailing punctuation
+    s = re.sub(r"[\.;:!?]+$", "", s).strip()
+    # Sentence case: first letter uppercase only
+    s = s[0].upper() + s[1:] if s else s
+    # Length cap
+    if len(s) > max_len:
+        s = s[: max_len].rstrip()
+    return s
+
+
+def generate_title(question: str, summary: str) -> str:
+    """Generate a concise chat title based on the first exchange.
+
+    Hard constraints (prompted and sanitized):
+    - 3–6 words, sentence case, no quotes/emojis
+    - No trailing period
+    - Use 'vs' lowercase when appropriate
+    - ≤ 60 characters, may use parentheses
+    """
+    model = _ensure_model()
+    q = (question or "").strip()
+    s = (summary or "").strip()
+
+    prompt = (
+        "You generate short chat titles.\n"
+        "Produce a concise 3–6 word title that is meaningful and grammatically correct, in sentence case.\n"
+        "Rules: no quotes, no emojis, no trailing punctuation, avoid pronouns like 'me/my', avoid leading articles unless needed, ≤ 60 characters.\n"
+        "If a comparison is present, use the form 'a vs b' with lowercase 'vs'. Parentheses are allowed.\n\n"
+        f"User Question:\n{q}\n\n"
+        f"Assistant Summary:\n{s}\n\n"
+        "Return ONLY the title text with no extra commentary."
+    )
+
+    try:
+        resp = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": 24,
+                "temperature": 0.25,
+            },
+        )
+        text = _safe_response_text(resp)
+        title = _sanitize_title(text)
+        # Guardrails: prefer 3–6 words
+        words = [w for w in title.split(" ") if w]
+        if 3 <= len(words) <= 8 and title:
+            return title
+        # If outside range but non-empty, still return sanitized title (length already capped)
+        if title:
+            return title
+    except Exception:
+        pass
+
+    # Fallback: minimal heuristic from question
+    if q:
+        # Try to transform "compare X and Y" → "x vs y" (lowercase vs)
+        m = re.search(r"compare\s+(.+?)\s+and\s+(.+)$", q, flags=re.IGNORECASE)
+        if m:
+            rough = f"{m.group(1).strip()} vs {m.group(2).strip()}"
+        else:
+            rough = q
+        # Remove leading polite phrases and pronouns
+        rough = re.sub(r"^(please|can you|could you|would you|show|give me|tell me|me|my)\b[:,]?\s*", "", rough, flags=re.IGNORECASE)
+        return _sanitize_title(rough)
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Generate Summary
 # ---------------------------------------------------------------------------
 

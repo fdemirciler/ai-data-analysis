@@ -35,18 +35,33 @@ import numpy as np
 import pyarrow as pa  # type: ignore
 
 import matplotlib
+
 matplotlib.use("Agg")  # Non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Try to import sandbox validator (preferred)
 try:
-    from sandbox_runner import structured_validate, ALLOWED_IMPORTS as SANDBOX_ALLOWED_IMPORTS
+    from sandbox_runner import (
+        structured_validate,
+        ALLOWED_IMPORTS as SANDBOX_ALLOWED_IMPORTS,
+    )
 except Exception:
     SANDBOX_ALLOWED_IMPORTS = {
-        "pandas", "numpy", "matplotlib", "seaborn",
-        "math", "statistics", "json", "io", "itertools", "functools",
-        "collections", "re", "datetime", "base64"
+        "pandas",
+        "numpy",
+        "matplotlib",
+        "seaborn",
+        "math",
+        "statistics",
+        "json",
+        "io",
+        "itertools",
+        "functools",
+        "collections",
+        "re",
+        "datetime",
+        "base64",
     }
     structured_validate = None  # fallback
 
@@ -95,28 +110,60 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
 def _prepare_globals() -> dict:
     """Prepare restricted globals for execution."""
     import builtins as _builtins
+
     safe_builtins = {
         b: getattr(_builtins, b)
         for b in [
-            "abs", "all", "any", "bool", "dict", "enumerate", "filter",
-            "float", "int", "len", "list", "map", "max", "min", "pow",
-            "range", "round", "set", "slice", "sorted", "str", "sum",
-            "zip", "print", "isinstance", "getattr", "hasattr", "type",
+            "abs",
+            "all",
+            "any",
+            "bool",
+            "dict",
+            "enumerate",
+            "filter",
+            "float",
+            "int",
+            "len",
+            "list",
+            "map",
+            "max",
+            "min",
+            "pow",
+            "range",
+            "round",
+            "set",
+            "slice",
+            "sorted",
+            "str",
+            "sum",
+            "zip",
+            "print",
+            "isinstance",
+            "getattr",
+            "hasattr",
+            "type",
         ]
         if hasattr(_builtins, b)
     }
     safe_builtins["__import__"] = _safe_import
-    return {"__builtins__": safe_builtins, "pd": pd, "np": np, "plt": plt, "sns": sns, "RESULT": None}
+    return {
+        "__builtins__": safe_builtins,
+        "pd": pd,
+        "np": np,
+        "plt": plt,
+        "sns": sns,
+        "RESULT": None,
+    }
 
 
 def _set_resource_limits():
     """Apply memory and CPU limits (POSIX only)."""
     if resource is None:
         return
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (MAX_MEMORY_BYTES, MAX_MEMORY_BYTES))
-    except Exception:
-        pass
+    # try:
+    #     resource.setrlimit(resource.RLIMIT_AS, (MAX_MEMORY_BYTES, MAX_MEMORY_BYTES))
+    # except Exception:
+    #     pass
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (CODE_TIMEOUT + 5, CODE_TIMEOUT + 5))
     except Exception:
@@ -143,7 +190,9 @@ def _load_dataframe(payload: dict) -> pd.DataFrame:
         return pd.read_parquet(io.BytesIO(data))
     if payload.get("parquet_path"):
         return pd.read_parquet(payload["parquet_path"])
-    raise ValueError("Missing data payload: no parquet_b64, arrow_ipc_b64, or parquet_path provided")
+    raise ValueError(
+        "Missing data payload: no parquet_b64, arrow_ipc_b64, or parquet_path provided"
+    )
 
 
 def _fallback_result(df: pd.DataFrame, ctx: dict) -> dict:
@@ -153,7 +202,7 @@ def _fallback_result(df: pd.DataFrame, ctx: dict) -> dict:
         "table": df.head(row_limit).to_dict(orient="records"),
         "metrics": {"rows": len(df), "columns": len(df.columns)},
         "chartData": {},
-        "message": "Fallback result generated due to code execution failure."
+        "message": "Fallback result generated due to code execution failure.",
     }
 
 
@@ -163,6 +212,7 @@ def _fallback_result(df: pd.DataFrame, ctx: dict) -> dict:
 def main() -> int:
     global _orig_import
     import builtins as _builtins
+
     _orig_import = _builtins.__import__
 
     # Step 1: Read payload
@@ -204,7 +254,12 @@ def main() -> int:
     try:
         df = _load_dataframe(payload)
     except Exception as e:
-        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Failed to load data: {e}"}
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Failed to load data: {e}",
+        }
         print(json.dumps(output, ensure_ascii=False))
         return 0
 
@@ -230,7 +285,11 @@ def main() -> int:
 
         # Normalize
         if isinstance(result, pd.DataFrame):
-            result = {"table": result.to_dict(orient="records"), "metrics": {}, "chartData": {}}
+            result = {
+                "table": result.to_dict(orient="records"),
+                "metrics": {},
+                "chartData": {},
+            }
         elif isinstance(result, list):
             result = {"table": result, "metrics": {}, "chartData": {}}
         elif not isinstance(result, dict):
@@ -279,7 +338,9 @@ def main() -> int:
                     result["chartData"] = chosen
 
         # Ensure required keys
-        result.setdefault("table", df.head(int(ctx.get("row_limit", 200))).to_dict(orient="records"))
+        result.setdefault(
+            "table", df.head(int(ctx.get("row_limit", 200))).to_dict(orient="records")
+        )
         result.setdefault("metrics", {"rows": len(df), "columns": len(df.columns)})
         result.setdefault("chartData", {})
 
@@ -288,7 +349,12 @@ def main() -> int:
         return 0
 
     except _TimeoutException:
-        output = {"table": [], "metrics": {}, "chartData": {}, "error": f"Execution timed out after {CODE_TIMEOUT}s."}
+        output = {
+            "table": [],
+            "metrics": {},
+            "chartData": {},
+            "error": f"Execution timed out after {CODE_TIMEOUT}s.",
+        }
         print(json.dumps(output, ensure_ascii=False))
         return 0
 

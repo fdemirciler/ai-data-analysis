@@ -39,11 +39,9 @@ def _ensure_model():
 # Core: Generate Analysis Code
 # ---------------------------------------------------------------------------
 
+
 def generate_analysis_code(
-    question: str,
-    schema_snippet: str,
-    sample_rows: list[dict],
-    row_limit: int = 200
+    question: str, schema_snippet: str, sample_rows: list[dict], row_limit: int = 200
 ) -> str:
     """
     Ask Gemini to produce Python code, with a one-time auto-repair attempt.
@@ -68,7 +66,7 @@ def generate_analysis_code(
         "itertools, functools, collections, re, datetime, base64.\n\n"
         f"SCHEMA:\n{schema_snippet}\n\n"
         f"SAMPLE ROWS:\n{sample_preview}\n\n"
-        f"USER QUESTION:\n\"{question}\"\n\n"
+        f'USER QUESTION:\n"{question}"\n\n'
         "Return only the fenced Python code block now."
     )
 
@@ -83,13 +81,16 @@ def generate_analysis_code(
         alt = _extract_any_python_block(text)
         if alt:
             return _wrap_into_run_if_needed(alt)
-        raise RuntimeError("CODEGEN_FAILED: Missing valid 'def run(df, ctx):' implementation.")
+        raise RuntimeError(
+            "CODEGEN_FAILED: Missing valid 'def run(df, ctx):' implementation."
+        )
     return code
 
 
 # ---------------------------------------------------------------------------
 # Generate Short Chat Title
 # ---------------------------------------------------------------------------
+
 
 def _sanitize_title(raw: str, max_len: int = 60) -> str:
     """Sanitize and normalize a model-produced title to sentence case.
@@ -106,7 +107,11 @@ def _sanitize_title(raw: str, max_len: int = 60) -> str:
         return ""
     s = raw.strip()
     # Strip surrounding quotes/backticks
-    if (s.startswith("\"") and s.endswith("\"")) or (s.startswith("'") and s.endswith("'")) or (s.startswith("`") and s.endswith("`")):
+    if (
+        (s.startswith('"') and s.endswith('"'))
+        or (s.startswith("'") and s.endswith("'"))
+        or (s.startswith("`") and s.endswith("`"))
+    ):
         s = s[1:-1].strip()
     # Remove most emojis/symbols by keeping a conservative set
     s = re.sub(r"[^\w\s()\-:./&]", "", s)
@@ -124,7 +129,7 @@ def _sanitize_title(raw: str, max_len: int = 60) -> str:
     s = s[0].upper() + s[1:] if s else s
     # Length cap
     if len(s) > max_len:
-        s = s[: max_len].rstrip()
+        s = s[:max_len].rstrip()
     return s
 
 
@@ -180,7 +185,12 @@ def generate_title(question: str, summary: str) -> str:
         else:
             rough = q
         # Remove leading polite phrases and pronouns
-        rough = re.sub(r"^(please|can you|could you|would you|show|give me|tell me|me|my)\b[:,]?\s*", "", rough, flags=re.IGNORECASE)
+        rough = re.sub(
+            r"^(please|can you|could you|would you|show|give me|tell me|me|my)\b[:,]?\s*",
+            "",
+            rough,
+            flags=re.IGNORECASE,
+        )
         return _sanitize_title(rough)
     return ""
 
@@ -189,11 +199,9 @@ def generate_title(question: str, summary: str) -> str:
 # Generate Summary
 # ---------------------------------------------------------------------------
 
+
 def generate_summary(
-    question: str,
-    table_head: list[dict],
-    metrics: dict,
-    code: str | None = None
+    question: str, table_head: list[dict], metrics: dict, code: str | None = None
 ) -> str:
     """Generate a concise, data-driven summary from analysis results."""
     model = _ensure_model()
@@ -202,7 +210,7 @@ def generate_summary(
     prompt = (
         "You are a financial data analyst. Interpret the analysis results below. "
         "Focus on trends, anomalies, or key figures; do NOT describe the code.\n\n"
-        f"USER QUESTION: \"{question}\"\n\n"
+        f'USER QUESTION: "{question}"\n\n'
         f"TABLE PREVIEW:\n{preview}\n\n"
         f"KEY METRICS:\n{metrics}\n\n"
         "Organize your interpretation into multiple short paragraphs for readability. "
@@ -223,8 +231,10 @@ def generate_summary(
 
     # Fallback: minimal textual info if API fails or returns empty
     parts = []
-    if question: parts.append(f"Question: {question}")
-    if metrics: parts.append(f"Metrics: {list(metrics.keys())[:5]}")
+    if question:
+        parts.append(f"Question: {question}")
+    if metrics:
+        parts.append(f"Metrics: {list(metrics.keys())[:5]}")
     return " ".join(parts) or "No textual summary available."
 
 
@@ -232,18 +242,18 @@ def generate_summary(
 # Fused: Generate Code + Summary in a Single Call
 # ---------------------------------------------------------------------------
 
+
 def generate_code_and_summary(
-    question: str,
-    schema_snippet: str,
-    sample_rows: list[dict],
-    row_limit: int = 200
+    question: str, schema_snippet: str, sample_rows: list[dict], row_limit: int = 200
 ) -> tuple[str, str]:
     """
     Return (code, summary) using a single Gemini call, with a one-time repair loop.
     """
     fused = config.GEMINI_FUSED
     if not fused:
-        code = generate_analysis_code(question, schema_snippet, sample_rows, row_limit=row_limit)
+        code = generate_analysis_code(
+            question, schema_snippet, sample_rows, row_limit=row_limit
+        )
         return code, "Analysis planned. Executed results will follow."
 
     model = _ensure_model()
@@ -259,7 +269,7 @@ def generate_code_and_summary(
         "- Allowed imports: pandas, numpy, matplotlib, seaborn, math, statistics, json, io, "
         "itertools, functools, collections, re, datetime, base64.\n\n"
         f"--- DATA CONTEXT ---\nSchema: {schema_snippet}\nSample rows: {sample_preview}\n\n"
-        f"--- QUESTION ---\n\"{question}\"\n\n"
+        f'--- QUESTION ---\n"{question}"\n\n'
         "Return only the Python code block."
     )
 
@@ -270,12 +280,12 @@ def generate_code_and_summary(
 
     text = _safe_response_text(resp)
     code = _extract_code_block(text)
-    
+
     # One-time repair attempt if initial extraction fails
     if not code:
         feedback_prompt = (
             "Your previous response was not formatted correctly. "
-            f"Please regenerate the response for the following question: \"{question}\"\n\n"
+            f'Please regenerate the response for the following question: "{question}"\n\n'
             "Return a one-sentence summary, then a single, valid, fenced Python code block "
             "defining `def run(df, ctx):`."
         )
@@ -297,6 +307,7 @@ def generate_code_and_summary(
 # ---------------------------------------------------------------------------
 # Repair Code given Runtime Error
 # ---------------------------------------------------------------------------
+
 
 def repair_code(
     question: str,
@@ -325,7 +336,7 @@ def repair_code(
         f"PREVIOUS CODE:\n```python\n{previous_code}\n```\n\n"
         f"SCHEMA:\n{schema_snippet}\n\n"
         f"SAMPLE ROWS:\n{sample_preview}\n\n"
-        f"USER QUESTION:\n\"{question}\"\n\n"
+        f'USER QUESTION:\n"{question}"\n\n'
         "Return only the repaired Python code block."
     )
 
@@ -342,13 +353,16 @@ def repair_code(
         # As last resort, wrap the raw text
         if text:
             return _wrap_into_run_if_needed(text)
-        raise RuntimeError("REPAIR_FAILED: Missing valid 'def run(df, ctx):' implementation.")
+        raise RuntimeError(
+            "REPAIR_FAILED: Missing valid 'def run(df, ctx):' implementation."
+        )
     return code
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _safe_response_text(resp) -> str:
     """Safely extract text from Gemini responses, handling potential exceptions."""
@@ -387,7 +401,11 @@ def _wrap_into_run_if_needed(code: str) -> str:
         return code
     snippet = (code or "").strip()
     indent = "    "
-    body = "\n".join(indent + line for line in snippet.splitlines()) if snippet else f"{indent}result_df = df"
+    body = (
+        "\n".join(indent + line for line in snippet.splitlines())
+        if snippet
+        else f"{indent}result_df = df"
+    )
     wrapped = (
         "def run(df, ctx):\n"
         f"{indent}row_limit = int((ctx or {{}}).get('row_limit', 200))\n"
@@ -421,7 +439,9 @@ def generate_presentational_code(
     """
     model = _ensure_model()
 
-    if not isinstance(context, dict) or ("command" not in context and "question" not in context):
+    if not isinstance(context, dict) or (
+        "command" not in context and "question" not in context
+    ):
         return "# Could not generate code: missing analysis context."
 
     if "command" in context and context.get("command"):
@@ -430,7 +450,9 @@ def generate_presentational_code(
         except Exception:
             analysis_context = "ANALYSIS COMMAND: [unavailable]"
     else:
-        analysis_context = f"USER QUESTION:\n\"{str(context.get('question') or '').strip()}\""
+        analysis_context = (
+            f"USER QUESTION:\n\"{str(context.get('question') or '').strip()}\""
+        )
 
     base = (
         "You are an expert Python data analyst writing a tutorial-style script.\n"
@@ -468,6 +490,7 @@ def generate_presentational_code(
 # ---------------------------------------------------------------------------
 # JSON Extraction + Classifiers + Reconstruction
 # ---------------------------------------------------------------------------
+
 
 def _extract_json_block(text: str) -> str | None:
     """Extract a JSON object from model text output.
@@ -521,7 +544,9 @@ def classify_intent(
         out: dict = {"type": type_map.get(t, "OBJECT")}
         # properties
         if "properties" in js and isinstance(js.get("properties"), dict):
-            out["properties"] = {k: _to_gemini_schema(v) for k, v in js["properties"].items()}
+            out["properties"] = {
+                k: _to_gemini_schema(v) for k, v in js["properties"].items()
+            }
         # items for arrays
         if "items" in js:
             out["items"] = _to_gemini_schema(js.get("items"))
@@ -553,7 +578,11 @@ def classify_intent(
         if examples and isinstance(examples, list):
             fn["description"] += f"\n\nExample queries: {', '.join(examples[:5])}"
         function_declarations.append(fn)
-    tools_payload = [{"function_declarations": function_declarations}] if function_declarations else None
+    tools_payload = (
+        [{"function_declarations": function_declarations}]
+        if function_declarations
+        else None
+    )
 
     def _build_model_with_tools(model_name: str):
         """Instantiate a GenerativeModel with tools using types when available."""
@@ -566,11 +595,15 @@ def classify_intent(
             if Tool and FunctionDeclaration and Schema and function_declarations:
                 fns = []
                 for fd in function_declarations:
-                    fns.append(FunctionDeclaration(
-                        name=fd.get("name"),
-                        description=fd.get("description", ""),
-                        parameters=Schema(**fd.get("parameters", {"type": "OBJECT"}))
-                    ))
+                    fns.append(
+                        FunctionDeclaration(
+                            name=fd.get("name"),
+                            description=fd.get("description", ""),
+                            parameters=Schema(
+                                **fd.get("parameters", {"type": "OBJECT"})
+                            ),
+                        )
+                    )
                 tool_obj = Tool(function_declarations=fns)
                 return genai.GenerativeModel(model_name, tools=[tool_obj])
         except Exception:
@@ -627,7 +660,9 @@ def classify_intent(
                     if not parts:
                         continue
                     for p in parts:
-                        fc = getattr(p, "function_call", None) or getattr(p, "functionCall", None)
+                        fc = getattr(p, "function_call", None) or getattr(
+                            p, "functionCall", None
+                        )
                         if fc and getattr(fc, "name", None):
                             name = str(fc.name)
                             try:
@@ -659,7 +694,11 @@ def classify_intent(
         ql = q.lower()
         cols: list[str] = []
         try:
-            h = json.loads(hinting or "{}") if isinstance(hinting, str) else (hinting or {})
+            h = (
+                json.loads(hinting or "{}")
+                if isinstance(hinting, str)
+                else (hinting or {})
+            )
             if isinstance(h, dict) and isinstance(h.get("columns"), list):
                 cols = [str(c) for c in h.get("columns")]
         except Exception:
@@ -680,18 +719,36 @@ def classify_intent(
             return None
 
         # sum/total pattern with optional "by <dim>"
-        m = re.search(r"\b(sum|total)\s+of\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b", ql)
+        m = re.search(
+            r"\b(sum|total)\s+of\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b",
+            ql,
+        )
         if not m:
-            m = re.search(r"\b(sum|total)\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b", ql)
+            m = re.search(
+                r"\b(sum|total)\s+([\w\s\-]+?)(?:\s+column)?(?:\s+by\s+([\w\s\-]+))?\b",
+                ql,
+            )
         if m:
             metric_tok = m.group(2).strip()
             dim_tok = (m.group(3) or "").strip()
             metric_col = best_col(metric_tok)
             dim_col = best_col(dim_tok) if dim_tok else None
             if metric_col and dim_col:
-                return {"intent": "run_aggregation", "params": {"dimension": dim_col, "metric": metric_col, "func": "sum"}, "confidence": 0.7}
+                return {
+                    "intent": "run_aggregation",
+                    "params": {
+                        "dimension": dim_col,
+                        "metric": metric_col,
+                        "func": "sum",
+                    },
+                    "confidence": 0.7,
+                }
             if metric_col:
-                return {"intent": "sum_column", "params": {"column": metric_col}, "confidence": 0.7}
+                return {
+                    "intent": "sum_column",
+                    "params": {"column": metric_col},
+                    "confidence": 0.7,
+                }
     except Exception:
         pass
 
@@ -706,12 +763,14 @@ def is_show_code_request(question: str) -> dict:
     model = _ensure_model()
     prompt = (
         "Return STRICT JSON only indicating whether the user asks to show code.\n"
-        "Schema: {\"is_code_request\": true|false}\n\n"
-        f"USER: \"{question}\"\n"
+        'Schema: {"is_code_request": true|false}\n\n'
+        f'USER: "{question}"\n'
         "Answer with only a JSON object."
     )
     try:
-        resp = model.generate_content(prompt, generation_config=config.GEMINI_GENERATION_CONFIG)
+        resp = model.generate_content(
+            prompt, generation_config=config.GEMINI_GENERATION_CONFIG
+        )
         text = _safe_response_text(resp)
         js = _extract_json_block(text)
         if not js:
@@ -722,7 +781,9 @@ def is_show_code_request(question: str) -> dict:
         return {"is_code_request": False}
 
 
-def reconstruct_code_from_tool_call(tool_name: str, params: dict, schema_snippet: str) -> str:
+def reconstruct_code_from_tool_call(
+    tool_name: str, params: dict, schema_snippet: str
+) -> str:
     """Provide a transparent Python implementation of the selected tool call.
 
     This is shown to users for transparency; it does not need to be executed.
@@ -796,8 +857,10 @@ def format_final_response(question: str, result_df: pd.DataFrame) -> dict:
         table_head = result_df.head(5).to_dict(orient="records")
     except Exception:
         table_head = []
-    metrics = {"rows": int(getattr(result_df, "shape", [0, 0])[0] or 0),
-               "columns": int(getattr(result_df, "shape", [0, 0])[1] or 0)}
+    metrics = {
+        "rows": int(getattr(result_df, "shape", [0, 0])[0] or 0),
+        "columns": int(getattr(result_df, "shape", [0, 0])[1] or 0),
+    }
     summary = generate_summary(question, table_head, metrics)
     visuals: list[dict] = []
     return {"summary": summary, "visuals": visuals}

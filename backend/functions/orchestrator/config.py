@@ -97,7 +97,7 @@ ORCH_IPC_MODE: str = _getenv("ORCH_IPC_MODE", "base64").lower()
 
 # Embedding router (feature-flagged)
 EMBED_ROUTER_ENABLED: bool = _env_bool("EMBED_ROUTER_ENABLED", False)
-EMBED_MODEL: str = _getenv("EMBED_MODEL", "models/text-embedding-004")
+EMBED_MODEL: str = _getenv("EMBED_MODEL", "models/gemini-embedding-001")
 EMBED_TIMEOUT_SECONDS: float = float(_getenv("EMBED_TIMEOUT_SECONDS", "1.5"))
 EMBED_THRESHOLD_DEFAULT: float = float(_getenv("EMBED_THRESHOLD_DEFAULT", "0.83"))
 

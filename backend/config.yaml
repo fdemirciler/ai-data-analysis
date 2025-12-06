@@ -44,7 +44,7 @@ orchestrator:
     OUTLIERS: 0
     SUM_COLUMN: 0
   EMBED_ROUTER_ENABLED: 1
-  EMBED_MODEL: "models/text-embedding-004"
+  EMBED_MODEL: "models/gemini-embedding-001"
   EMBED_TIMEOUT_SECONDS: 1.5
   EMBED_THRESHOLD_DEFAULT: 0.83
 

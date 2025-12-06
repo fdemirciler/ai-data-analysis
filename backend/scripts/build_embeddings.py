@@ -23,7 +23,7 @@ except Exception as e:
     raise RuntimeError("google-generativeai must be installed to build embeddings") from e
 
 
-MODEL = os.getenv("EMBED_MODEL", "models/text-embedding-004")
+MODEL = os.getenv("EMBED_MODEL", "models/gemini-embedding-001")
 API_KEY = os.getenv("GEMINI_API_KEY")
 ASSETS_DIR = ORCH_PATH / "assets"
 EMBED_FILE = ASSETS_DIR / "embeddings.json"
